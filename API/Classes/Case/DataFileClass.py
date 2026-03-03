@@ -2083,7 +2083,41 @@ class DataFile(Osemosys):
         except OSError:
             raise OSError
 
-    def run( self, solver, caserun, lock=None ):
+    def _popen_with_cancel(self, cmd, cwd, cancel_event=None, job=None, start_time=None, timeout=3600):
+        """
+        Run a subprocess and check every 0.5s for cancellation or timeout.
+        Raises RuntimeError on cancel or timeout so the caller can clean up.
+        """
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if job is not None:
+            job.process = proc
+        if start_time is None:
+            start_time = time.time()
+        while proc.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                proc.kill()
+                proc.communicate()
+                raise RuntimeError("__cancelled__")
+            if time.time() - start_time > timeout:
+                proc.kill()
+                proc.communicate()
+                raise RuntimeError("__timeout__")
+            time.sleep(0.5)
+        stdout, stderr = proc.communicate()
+        return subprocess.CompletedProcess(
+            args=proc.args,
+            returncode=proc.returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    def run( self, solver, caserun, lock=None, cancel_event=None, job=None, timeout=3600 ):
         try:
             caserunname = caserun
             if lock is not None:
@@ -2129,11 +2163,11 @@ class DataFile(Osemosys):
             self.deleteCaseResultsJSON(caserunname)
 
             if solver == 'glpk':
-                glpk_out = subprocess.run(
+                glpk_out = self._popen_with_cancel(
                     [str(glpsol_exec), "-m", modelfile, "-d", datafile, "-o", resultfile],
                     cwd=glpfolder,
-                    capture_output=True,
-                    text=True,
+                    cancel_event=cancel_event, job=job,
+                    start_time=start_time, timeout=timeout,
                 )
                 cbc_out = subprocess.CompletedProcess(args=["cbc"], returncode=0, stdout="", stderr="")
             else:
@@ -2153,11 +2187,11 @@ class DataFile(Osemosys):
                 txtOut = txtOut + ("Preprocessing time {:0.2f}s;{}".format(time.time() - start_time, '\n'))
 
                 #return output to variable preprocessed data file
-                glpk_out = subprocess.run(
+                glpk_out = self._popen_with_cancel(
                     [str(glpsol_exec), "--check", "-m", modelfile, "-d", datafile_processed, "--wlp", lpfile],
                     cwd=glpfolder,
-                    capture_output=True,
-                    text=True,
+                    cancel_event=cancel_event, job=job,
+                    start_time=start_time, timeout=timeout,
                 )
             
 
@@ -2183,11 +2217,11 @@ class DataFile(Osemosys):
 
                 #cbc_out = subprocess.run('cbc ' + lpfile +' -presolve off -postsolve on -logLevel 3 solve -printing all -solu '  + resultfile, cwd=cbcfolder,  capture_output=True, text=True, shell=True)
                 # prin
-                cbc_out = subprocess.run(
+                cbc_out = self._popen_with_cancel(
                     [str(cbc_exec), lpfile, "solve", "-printing", "all", "-solu", resultfile],
                     cwd=cbcfolder,
-                    capture_output=True,
-                    text=True,
+                    cancel_event=cancel_event, job=job,
+                    start_time=start_time, timeout=timeout,
                 )
                 # -printing all prints all constraints to result.txt
                 print("SOLUTION DONE! --- %s seconds --- %s" % (time.time() - start_time, caserunname))
@@ -2262,6 +2296,25 @@ class DataFile(Osemosys):
             return response
             # urllib.request.urlretrieve(self.dataFile, dataFile)
 
+        except RuntimeError as ex:
+            msg = str(ex)
+            if msg == "__cancelled__":
+                return {
+                    "cbc_message": "", "cbc_stdmsg": "",
+                    "glpk_message": "", "glpk_stdmsg": "",
+                    "timer": "Run cancelled by user.",
+                    "status_code": "cancelled",
+                    "caserun": caserun
+                }
+            if msg == "__timeout__":
+                return {
+                    "cbc_message": "", "cbc_stdmsg": "",
+                    "glpk_message": "", "glpk_stdmsg": "",
+                    "timer": f"Run timed out after {timeout}s.",
+                    "status_code": "error",
+                    "caserun": caserun
+                }
+            raise
         except Exception as ex:
             print(ex) # do whatever you want for debugging.
             raise    # re-raise exception.

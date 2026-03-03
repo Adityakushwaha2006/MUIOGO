@@ -8,7 +8,8 @@
 - static frontend assets from `WebAPP/`
 - model data and run artifacts in `WebAPP/DataStorage/`
 
-Solver execution is handled by backend subprocess calls (GLPK/CBC).
+Solver execution runs asynchronously , the API returns immediately with a job ID
+and the solver runs in the background.
 
 ## Major components
 
@@ -57,6 +58,23 @@ If no solver is found through any of these steps, a `RuntimeError` is raised
 at startup with a clear, actionable message. This replaces the previous
 hardcoded, platform-specific path strings which failed silently on
 Linux and Apple Silicon (see issue #43).
+
+### Solver execution
+
+Solver runs are handled asynchronously via `JobManager` in
+`API/Classes/Base/JobManager.py`.
+
+When `POST /run` is called:
+
+1. A job is created with a unique ID and the solver starts in a background thread.
+2. The API returns the job ID immediately with HTTP 202.
+3. The client polls `GET /runStatus/<job_id>` to check progress.
+4. If needed, `POST /cancelRun/<job_id>` stops the solver and cleans up.
+
+Each job moves through these states: `pending → running → completed / error / cancelled`.
+
+Jobs are kept in memory and evicted after 24 hours. They are not persisted across
+server restarts.
 
 ## Upstream/downstream relationship
 

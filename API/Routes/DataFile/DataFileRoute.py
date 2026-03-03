@@ -1,8 +1,9 @@
 from flask import Blueprint, jsonify, request, send_file, session
 from pathlib import Path
-import shutil, datetime, time, os
+import shutil, datetime, time, os, threading
 from Classes.Case.DataFileClass import DataFile
 from Classes.Base import Config
+from Classes.Base.JobManager import JobManager
 
 datafile_api = Blueprint('DataFileRoute', __name__)
 
@@ -215,32 +216,89 @@ def downloadResultsFile():
 @datafile_api.route("/run", methods=['POST'])
 def run():
     try:
-        casename = request.json['casename']
+        casename    = request.json['casename']
         caserunname = request.json['caserunname']
-        solver = request.json['solver']
-        txtFile = DataFile(casename)
-        response = txtFile.run(solver, caserunname)     
-        return jsonify(response), 200
-    # except Exception as ex:
-    #     print(ex)
-    #     return ex, 404
-    
-    except(IOError):
-        return jsonify('No existing cases!'), 404
-    
+        solver      = request.json['solver']
+        timeout     = request.json.get('timeout', 3600)
+
+        manager = JobManager.get_instance()
+        job = manager.create_job(casename, caserunname, solver)
+
+        def worker():
+            manager.start_job(job.job_id)
+            try:
+                txt_file = DataFile(casename)
+                result = txt_file.run(
+                    solver,
+                    caserunname,
+                    cancel_event=job.cancel_event,
+                    job=job,
+                    timeout=timeout,
+                )
+                if result.get('status_code') == 'cancelled':
+                    pass  # cancel_job() already set the status
+                else:
+                    manager.complete_job(job.job_id, result)
+            except Exception as exc:
+                manager.fail_job(job.job_id, str(exc))
+
+        thread = threading.Thread(target=worker, daemon=True, name=f"solver-{job.job_id[:8]}")
+        thread.start()
+
+        return jsonify({
+            "job_id":      job.job_id,
+            "status":      "running",
+            "status_code": "accepted",
+            "message":     "Solver job started. Poll /runStatus/<job_id> for updates."
+        }), 202
+
+    except KeyError as exc:
+        return jsonify({"message": f"Missing required field: {exc}", "status_code": "error"}), 400
+    except Exception as exc:
+        return jsonify({"message": str(exc), "status_code": "error"}), 500
+
+
+@datafile_api.route("/runStatus/<job_id>", methods=['GET'])
+def runStatus(job_id):
+    manager = JobManager.get_instance()
+    job = manager.get_job(job_id)
+    if job is None:
+        return jsonify({"message": "Job not found.", "status_code": "error"}), 404
+    return jsonify(job.to_dict()), 200
+
+
+@datafile_api.route("/cancelRun/<job_id>", methods=['POST'])
+def cancelRun(job_id):
+    manager = JobManager.get_instance()
+    cancelled = manager.cancel_job(job_id)
+    if not cancelled:
+        job = manager.get_job(job_id)
+        if job is None:
+            return jsonify({"message": "Job not found.", "status_code": "error"}), 404
+        return jsonify({
+            "message": f"Job cannot be cancelled \u2014 current status: {job.status}",
+            "status_code": "error"
+        }), 409
+    return jsonify({
+        "message": "Cancellation signal sent.",
+        "status_code": "success"
+    }), 200
+
+
 @datafile_api.route("/batchRun", methods=['POST'])
 def batchRun():
     try:
         start = time.time()
         modelname = request.json['modelname']
         cases = request.json['cases']
+        solver = request.json.get('solver', 'cbc')
 
         if modelname != None:
             txtFile = DataFile(modelname)
             for caserun in cases:
                 txtFile.generateDatafile(caserun)
 
-            response = txtFile.batchRun( 'CBC', cases) 
+            response = txtFile.batchRun( solver, cases) 
         end = time.time()  
         response['time'] = end-start 
         return jsonify(response), 200

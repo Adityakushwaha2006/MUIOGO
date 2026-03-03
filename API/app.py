@@ -56,6 +56,10 @@ app.register_blueprint(syncs3_api)
 
 CORS(app)
 
+# Start the job manager now so it's ready before the first request.
+from Classes.Base.JobManager import JobManager
+JobManager.get_instance()
+
 #potrebno kad je front end na drugom serveru 127.0.0.1
 @app.after_request
 def add_headers(response):
