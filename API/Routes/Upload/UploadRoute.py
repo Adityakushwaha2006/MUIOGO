@@ -399,8 +399,6 @@ def uploadCaseUnchunked_old():
         }
 
         return jsonify(response), 200
-    except(IOError):
-        raise IOError
     except OSError:
         return jsonify({'message': 'A filesystem error occurred.', 'status_code': 'error'}), 500
 
@@ -649,7 +647,5 @@ def uploadXls():
         }
 
         return jsonify(response), 200
-    except(IOError):
-        raise IOError
     except OSError:
         return jsonify({'message': 'A filesystem error occurred.', 'status_code': 'error'}), 500
