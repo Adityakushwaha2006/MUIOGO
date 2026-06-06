@@ -20,7 +20,7 @@ Two tiers, both opt-in (neither runs in the default `pytest` suite):
                      expected_ogcore_example_output.csv, hours
 
 Both tiers run two live solves per path (the "two-solve" equivalence). Fixtures
-are sourced from the pinned v.0.15.13 tag in tests/ogcore_fixtures/.
+are sourced from the pinned v.0.15.13 tag in tests/ogcore_standalone/ogcore_fixtures/.
 """
 
 import os
@@ -115,8 +115,8 @@ def _run_via_layer(base_spec: dict, reform_spec: dict) -> list:
     )
 
 
-# Reduced / official og_spec builders live in tests/_ogcore_specs.py (shared
-# with the production-context test).
+# Reduced / official og_spec builders live in _ogcore_specs.py in this folder
+# (shared with the production-context test).
 
 
 # ──────────────────────────────────────────────────────────────────────────

@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# This file lives in tests/ogcore_standalone/, so the repo root is three up.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 API_DIR = PROJECT_ROOT / "API"
 
 EXPECTED_OGC_ROUTE_COUNT = 27

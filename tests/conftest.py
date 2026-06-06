@@ -1,7 +1,9 @@
 """
-Fixtures shared across all tests.
+Fixtures shared across all tests (CLEWS and OG-Core).
 
 API/ is on the path via pyproject.toml, so imports just work with no sys.path hacks.
+The OG-Core-specific fixtures (isolated_storage, ogc_client) live in
+tests/ogcore_standalone/conftest.py and inherit app/client from here.
 """
 
 import pytest
@@ -30,32 +32,5 @@ def app():
 @pytest.fixture()
 def client(app):
     """Return a test client for the Flask app."""
-    with app.test_client() as c:
-        yield c
-
-
-# ── OG-Core fixtures (shared by all test_ogcore_* modules) ──────────────────
-
-@pytest.fixture()
-def isolated_storage(tmp_path, monkeypatch):
-    """
-    Redirect Config.OGC_DATA_STORAGE to a fresh temp dir for one test.
-
-    OGCoreCase / OGCoreRunner read Config.OGC_DATA_STORAGE at construction, and
-    the route layer reads it per request, so patching the attribute before the
-    test runs fully isolates OG-Core disk state. Nothing touches the real store,
-    and each test starts from an empty directory (deterministic, no flakiness).
-    """
-    from Classes.Base import Config
-
-    store = tmp_path / "OGCore"
-    store.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(Config, "OGC_DATA_STORAGE", store)
-    return store
-
-
-@pytest.fixture()
-def ogc_client(app, isolated_storage):
-    """Test client whose OG-Core storage is the isolated temp dir."""
     with app.test_client() as c:
         yield c

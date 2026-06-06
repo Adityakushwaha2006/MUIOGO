@@ -34,7 +34,9 @@ ignore = [
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["API", "tests"]
+# "tests/ogcore_standalone" is on the path so its shared _ogcore_specs helper
+# imports as a top-level module from the OG-Core test files in that folder.
+pythonpath = ["API", "tests", "tests/ogcore_standalone"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 # Default run excludes the heavy OG-Core pipeline tests. Opt in with:
