@@ -46,17 +46,28 @@ incrementally with tested changes.
 
 ### Solver resolution
 
-Solver binaries (GLPK / CBC) are resolved at runtime using a three-tier
+Solver binaries (GLPK / CBC) are resolved at runtime using a four-tier
 priority chain implemented in `Osemosys._resolve_solver_folder`:
 
 1. **Environment variable** — `SOLVER_GLPK_PATH` or `SOLVER_CBC_PATH`
 2. **System PATH** — via `shutil.which` (supports package-manager installs)
-3. **Bundled fallback** — folder inside `Config.SOLVERs_FOLDER`
+3. **Platform standard locations** — macOS: `/opt/homebrew/bin`,
+   `/usr/local/bin`, `/usr/bin`; Linux: `/usr/bin`, `/usr/local/bin`, `/bin`,
+   `/snap/bin`. Catches installs where the package manager placed the binary
+   in a standard location but did not refresh PATH for the current shell.
+   Inherited from MUIO 5.6.
+4. **Bundled fallback** — folder inside `Config.SOLVERs_FOLDER`
 
 If no solver is found through any of these steps, a `RuntimeError` is raised
 at startup with a clear, actionable message. This replaces the previous
 hardcoded, platform-specific path strings which failed silently on
 Linux and Apple Silicon (see issue #43).
+
+The resolver returns `(folder, is_bundled)`. `is_bundled` is `True` only when
+the binary was found via tier 4. `DataFileClass.run` uses this to decide
+whether to set the solver subprocess's `cwd` to the solver folder (bundled,
+so adjacent DLLs resolve) or leave it inheriting from the caller (system
+install). Inherited from MUIO 5.6.
 
 ## Upstream/downstream relationship
 

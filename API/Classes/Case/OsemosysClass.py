@@ -4,56 +4,70 @@ import platform
 import shutil
 from Classes.Base import Config
 from Classes.Base.FileClass import File
+from Classes.Case.HelpersClass import Helpers
 
 class Osemosys():
     def __init__(self, case):
         Config.validate_path(Config.DATA_STORAGE, case)
         self.case = case
-        self.PARAMETERS = File.readParamFile(Path(Config.DATA_STORAGE, 'Parameters.json'))
-        self.VARIABLES = File.readParamFile(Path(Config.DATA_STORAGE, 'Variables.json'))
-        self.genData =  File.readFile(Path(Config.DATA_STORAGE,case,'genData.json'))
-        self.resData = File.readFile( Path(Config.DATA_STORAGE, case,'view', 'resData.json'))
-        
+        self.storagePath = Path(Config.DATA_STORAGE)
+        self.casePath = self.storagePath / case
+
+        self.PARAMETERS = File.readParamFile(self.storagePath / 'Parameters.json')
+        self.VARIABLES = File.readParamFile(self.storagePath / 'Variables.json')
+        # Stub files committed in #458 because upstream MUIO 5.6 reads them but
+        # forgot to commit them. The safe-read keeps us alive if a deploy is
+        # missing the stub for any reason (e.g. a user wiped DataStorage).
+        self.DUALS = self._safe_read_param_file(self.storagePath / 'Duals.json')
+        self.INDICATORS = self._safe_read_param_file(self.storagePath / 'Indicators.json')
+        self.genData =  File.readFile(self.casePath / 'genData.json')
+        # Pre-v5.6 cases never had osy-indicators; guard so opening them does
+        # not KeyError. `or []` also normalizes the "key present but null"
+        # case so downstream iterations are safe.
+        self.customIndicators = self.genData.get('osy-indicators') or []
+        self.resData = File.readFile(self.casePath / 'view' / 'resData.json')
+
         #Case.__init__(self, case)
-        self.casePath = Path(Config.DATA_STORAGE,case)
-        self.zipPath = Path(Config.DATA_STORAGE,case+'.zip')
+        self.zipPath = self.storagePath / (case + '.zip')
 
         #self.genData = Path(Config.DATA_STORAGE,case,'genData.json')
 
-        self.rPath = Path(Config.DATA_STORAGE,case,'R.json')
-        self.ryPath = Path(Config.DATA_STORAGE,case,'RY.json')
-        self.rtPath = Path(Config.DATA_STORAGE,case,'RT.json')
-        self.rePath = Path(Config.DATA_STORAGE,case,'RE.json')
-        self.rsPath = Path(Config.DATA_STORAGE,case,'RS.json')
-        self.rycnPath = Path(Config.DATA_STORAGE,case,'RYCn.json')
-        self.rytPath = Path(Config.DATA_STORAGE,case,'RYT.json')
-        self.rysPath = Path(Config.DATA_STORAGE,case,'RYS.json')
-        self.rytcnPath = Path(Config.DATA_STORAGE,case,'RYTCn.json')
-        self.rytmPath = Path(Config.DATA_STORAGE,case,'RYTM.json')
-        self.rytcPath = Path(Config.DATA_STORAGE,case,'RYTC.json')
-        self.rytcmPath = Path(Config.DATA_STORAGE,case,'RYTCM.json')
-        self.rytsmPath = Path(Config.DATA_STORAGE,case,'RYTSM.json')
-        self.rtsmPath = Path(Config.DATA_STORAGE,case,'RTSM.json')
-        self.rytsPath = Path(Config.DATA_STORAGE,case,'RYTs.json')
-        self.rydtbPath = Path(Config.DATA_STORAGE,case,'RYDtb.json')
-        self.rysedtPath = Path(Config.DATA_STORAGE,case,'RYSeDt.json')
-        self.rycPath = Path(Config.DATA_STORAGE,case,'RYC.json')
-        self.ryePath = Path(Config.DATA_STORAGE,case,'RYE.json')
-        self.ryttsPath = Path(Config.DATA_STORAGE,case,'RYTTs.json')
-        self.ryctsPath = Path(Config.DATA_STORAGE,case,'RYCTs.json')
-        self.rytePath = Path(Config.DATA_STORAGE,case,'RYTE.json')
-        self.rytemPath = Path(Config.DATA_STORAGE,case,'RYTEM.json')
+        self.rPath = self.casePath / 'R.json'
+        self.ryPath = self.casePath / 'RY.json'
+        self.rtPath = self.casePath / 'RT.json'
+        self.rePath = self.casePath / 'RE.json'
+        self.rsPath = self.casePath / 'RS.json'
+        self.rycnPath = self.casePath / 'RYCn.json'
+        self.rytPath = self.casePath / 'RYT.json'
+        self.rysPath = self.casePath / 'RYS.json'
+        self.rytcnPath = self.casePath / 'RYTCn.json'
+        self.rytmPath = self.casePath / 'RYTM.json'
+        self.rytcPath = self.casePath / 'RYTC.json'
+        self.rytcmPath = self.casePath / 'RYTCM.json'
+        self.rytsmPath = self.casePath / 'RYTSM.json'
+        self.rtsmPath = self.casePath / 'RTSM.json'
+        self.rytsPath = self.casePath / 'RYTs.json'
+        self.rydtbPath = self.casePath / 'RYDtb.json'
+        self.rysedtPath = self.casePath / 'RYSeDt.json'
+        self.rycPath = self.casePath / 'RYC.json'
+        self.ryePath = self.casePath / 'RYE.json'
+        self.ryttsPath = self.casePath / 'RYTTs.json'
+        self.ryctsPath = self.casePath / 'RYCTs.json'
+        self.rytePath = self.casePath / 'RYTE.json'
+        self.rytemPath = self.casePath / 'RYTEM.json'
 
-        
-        self.osemosysFile = Path(Config.SOLVERs_FOLDER,'model.v.5.4.txt') 
+
+        self.osemosysFile = Path(Config.SOLVERs_FOLDER,'model.v.5.4.txt')
         self.osemosysFileOriginal = Path(Config.SOLVERs_FOLDER,'osemosys.txt')
         self._glpkFolder = None
         self._cbcFolder = None
+        self._glpsol_is_bundled = None
+        self._cbc_is_bundled = None
 
-        self.resultsPath = Path(Config.DATA_STORAGE,case,'res')
-        self.viewFolderPath = Path(Config.DATA_STORAGE,case,'view')
-        
-        self.resDataPath = Path(Config.DATA_STORAGE,case,'view', 'resData.json')
+        self.resultsPath = self.casePath / 'res'
+        self.viewFolderPath = self.casePath / 'view'
+
+        self.resDataPath = self.viewFolderPath / 'resData.json'
 
         # self.resPath = Path(Config.DATA_STORAGE,case,'res', 'csv')
         
@@ -63,24 +77,22 @@ class Osemosys():
         # self.resCBCPath = Path('..', '..', '..', '..', 'WebAPP', 'DataStorage', case, 'res')
         # self.resPath = Path('..', '..', '..', '..', 'WebAPP', 'DataStorage', case, 'res', 'csv')
 
-        d = {}
-        for k, l in self.PARAMETERS.items():
-            tmp = {}
-            for de in l:
-                tmp[de['id']] = (de['value'] or "").replace(" ", "")
-            d[k] = tmp
-        self.PARAM = d
-
-        a=[]
-        for k, l in self.VARIABLES.items():
-            for de in l:
-                a.append(de['name'])
-        self.VARS = a
+        self.PARAM = Helpers.build_param(self.PARAMETERS)
+        self.VARS = Helpers.build_vars(self.VARIABLES)
+        self.VAR_BY_NAME = Helpers.build_var_by_name(self.VARIABLES)
+        # Indicator and dual derived state. Empty until upstream commits real
+        # Indicators.json / Duals.json content; harmless no-ops in the
+        # meantime. Wired here so future indicator-pipeline consumers don't
+        # have to re-derive.
+        tech_map = self.getTechsMap()
+        self.IND_BY_NAME = Helpers.merge_all_indicators(self.INDICATORS, self.customIndicators, tech_map)
+        self.IND_GROUPED = Helpers.merge_all_indicators_grouped(self.INDICATORS, self.customIndicators, tech_map)
+        self.DUALS_BY_NAME = Helpers.build_var_by_name(self.DUALS)
 
     @property
     def glpkFolder(self):
         if self._glpkFolder is None:
-            self._glpkFolder = self._resolve_solver_folder(
+            self._glpkFolder, self._glpsol_is_bundled = self._resolve_solver_folder(
                 env_var="SOLVER_GLPK_PATH",
                 binary_name="glpsol",
                 bundled_path=Path(Config.SOLVERs_FOLDER, "GLPK"),
@@ -90,12 +102,34 @@ class Osemosys():
     @property
     def cbcFolder(self):
         if self._cbcFolder is None:
-            self._cbcFolder = self._resolve_solver_folder(
+            self._cbcFolder, self._cbc_is_bundled = self._resolve_solver_folder(
                 env_var="SOLVER_CBC_PATH",
                 binary_name="cbc",
                 bundled_path=Path(Config.SOLVERs_FOLDER, "COIN-OR"),
             )
         return self._cbcFolder
+
+    @property
+    def glpsol_is_bundled(self):
+        # Trigger lazy resolution so _glpsol_is_bundled gets set.
+        _ = self.glpkFolder
+        return bool(self._glpsol_is_bundled)
+
+    @property
+    def cbc_is_bundled(self):
+        _ = self.cbcFolder
+        return bool(self._cbc_is_bundled)
+
+    @staticmethod
+    def _safe_read_param_file(path: Path) -> dict:
+        """Read a param JSON file, returning {} when the file is missing or
+        unreadable. Used for Duals.json / Indicators.json which MUIO 5.6 reads
+        but upstream forgot to commit. We ship empty stubs but should still
+        survive if those go missing on a given deploy."""
+        try:
+            return File.readParamFile(path)
+        except (FileNotFoundError, IOError, OSError):
+            return {}
 
     @staticmethod
     def _solver_binary_names(binary_name: str):
@@ -129,12 +163,21 @@ class Osemosys():
         return None
 
     @staticmethod
-    def _resolve_solver_folder(env_var: str, binary_name: str, bundled_path: Path) -> Path:
-        """Resolve a solver binary folder using a three-tier priority chain:
+    def _resolve_solver_folder(env_var: str, binary_name: str, bundled_path: Path):
+        """Resolve a solver binary folder using a four-tier priority chain.
 
-        1. Environment variable (e.g. SOLVER_GLPK_PATH)
-        2. System PATH via shutil.which
-        3. Bundled binary folder inside SOLVERs_FOLDER
+        Tiers:
+          1. Environment variable (e.g. SOLVER_GLPK_PATH) — set by setup script.
+          2. System PATH via shutil.which.
+          3. Standard install locations per platform (MUIO 5.6 inheritance):
+             macOS: /opt/homebrew/bin, /usr/local/bin, /usr/bin
+             Linux: /usr/bin, /usr/local/bin, /bin, /snap/bin
+          4. Bundled binary folder inside SOLVERs_FOLDER.
+
+        Returns (folder, is_bundled) — is_bundled is True only when the binary
+        was found in the bundled SOLVERs_FOLDER (tier 4). Used by DataFileClass.run
+        to decide whether the subprocess cwd should be the solver folder
+        (bundled, so adjacent DLLs resolve) or None (system install).
 
         Raises RuntimeError when resolution is attempted and no solver can be
         located, instead of silently storing a wrong path and failing mid-run.
@@ -144,7 +187,7 @@ class Osemosys():
             env_path = Path(env_val).expanduser()
             env_binary = Osemosys._find_solver_binary(env_path, binary_name, recursive=False)
             if env_binary is not None:
-                return env_binary.resolve().parent
+                return env_binary.resolve().parent, False
 
             raise RuntimeError(
                 f"{env_var} is set to '{env_val}', but no '{binary_name}' binary was found there.\n"
@@ -154,11 +197,24 @@ class Osemosys():
         for solver_name in Osemosys._solver_binary_names(binary_name):
             which = shutil.which(solver_name)
             if which:
-                return Path(which).resolve().parent
+                return Path(which).resolve().parent, False
+
+        system = platform.system()
+        if system == "Darwin":
+            standard_paths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+        elif system == "Linux":
+            standard_paths = ["/usr/bin", "/usr/local/bin", "/bin", "/snap/bin"]
+        else:
+            standard_paths = []
+
+        for p in standard_paths:
+            candidate = Osemosys._find_solver_binary(Path(p), binary_name, recursive=False)
+            if candidate is not None:
+                return candidate.resolve().parent, False
 
         bundled_binary = Osemosys._find_solver_binary(bundled_path, binary_name, recursive=True)
         if bundled_binary is not None:
-            return bundled_binary.resolve().parent
+            return bundled_binary.resolve().parent, True
 
         raise RuntimeError(
             f"Solver binary '{binary_name}' could not be found.\n"

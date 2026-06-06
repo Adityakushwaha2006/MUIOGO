@@ -1,0 +1,94 @@
+{
+    "RYE": [
+        {
+            "id": "AEL_d",
+            "value": "Shadow price - Emissions Limit",
+            "name": "E8_AnnualEmissionsLimit",
+            "setrelation": [
+                "r",
+                "e",
+                "y"
+            ],
+            "unitRule": {
+                "cat": [
+                    {
+                        "var": "milion"
+                    },
+                    {
+                        "var": "Currency"
+                    },
+                    {
+                        "var": "divide"
+                    },
+                    {
+                        "var": "EmiUnit"
+                    }
+                ]
+            }
+        }
+    ],
+    "RYC": [
+        {
+            "id": "EB_d",
+            "value": "Shadow price - Energy Balance",
+            "name": "EBb4_EnergyBalanceEachYear4_ICR",
+            "setrelation": [
+                "r",
+                "f",
+                "y"
+            ],
+            "unitRule": {
+                "cat": [
+                    {
+                        "var": "milion"
+                    },
+                    {
+                        "var": "Currency"
+                    },
+                    {
+                        "var": "divide"
+                    },
+                    {
+                        "var": "EmiUnit"
+                    }
+                ]
+            }
+        }
+    ],
+    "RYCn": [
+        {
+            "id": "UDCI_d",
+            "value": "Shadow price - UDC Inequality",
+            "name": "UDC1_UserDefinedConstraintInequality",
+            "setrelation": [
+                "r",
+                "cn",
+                "y"
+            ],
+            "unitRule": {
+                "cat": [
+                    {
+                        "var": "number"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "UDCE_d",
+            "value": "Shadow price - UDC Equality",
+            "name": "UDC2_UserDefinedConstraintEquality",
+            "setrelation": [
+                "r",
+                "cn",
+                "y"
+            ],
+            "unitRule": {
+                "cat": [
+                    {
+                        "var": "number"
+                    }
+                ]
+            }
+        }
+    ]
+}

@@ -2,7 +2,7 @@ import { DefaultObj } from "../../Classes/DefaultObj.Class.js";
 import { DataModel } from "../../Classes/DataModel.Class.js";
 
 export class Model {
-  constructor(genData, resData, PARAMETERS, pageId) {
+  constructor(genData, resData, PARAMETERS, INDICATORS, pageId) {
    
     if (genData) {
       this.casename = genData['osy-casename'];
@@ -16,6 +16,7 @@ export class Model {
       this.dtNames = DataModel.DtName(genData);
       this.dtbNames = DataModel.DtbName(genData);
       this.emiNames = DataModel.EmiName(genData);
+      this.indicatorTypes = DataModel.getIndicatorTypes(INDICATORS);
       this.caserunByScenario = DataModel.getCaserunByScenario(genData, resData);
 
       this.title = "Model configuration";
@@ -33,7 +34,11 @@ export class Model {
       this.dailytimebrackets = genData['osy-dtb'];
       this.commodities = genData['osy-comm'];
       this.emissions = genData['osy-emis'];
-      this.constraints = genData['osy-constraints']
+      this.constraints = genData['osy-constraints'];
+      // MUIOGO: `|| []` guards pre-v5.6 cases that have no osy-indicators
+      // key. Without it, opening any older case throws a JS error.
+      this.indicators = genData['osy-indicators'] || [];
+
 
       this.techCount = genData['osy-tech'].length;
       this.stgCount = genData['osy-stg'].length;
@@ -46,6 +51,8 @@ export class Model {
       this.emisCount = genData['osy-emis'].length;
       this.scenariosCount = genData['osy-scenarios'].length;
       this.constraintsCount = genData['osy-constraints'].length;
+      this.indicatorsCount = (genData['osy-indicators'] || []).length;
+    
       this.pageId = pageId;
     } else {
       let years = [];
@@ -85,9 +92,11 @@ export class Model {
       this.seasons = DefaultObj.defaultSe(true);
       this.daytypes = DefaultObj.defaultDt(true);
       this.dailytimebrackets = DefaultObj.defaultDtb(true);
+      this.indicatorTypes = DataModel.getIndicatorTypes(INDICATORS);
 
       
       this.constraints = [];
+      this.indicators = [];
       this.techCount = 1;
       this.stgCount = 0;
       this.techGroupCount = 1;
@@ -99,6 +108,7 @@ export class Model {
       this.emisCount = 1;
       this.scenariosCount = 1;
       this.constraintsCount = 0,
+         this.indicatorsCount = 0,
       this.pageId = pageId;
     }
   }

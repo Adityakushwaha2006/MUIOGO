@@ -189,21 +189,27 @@ def resultsExists():
 @case_api.route("/saveParamFile", methods=['POST'])
 def saveParamFile():
     try:
-        err, code = validate_json_fields('ParamData', 'VarData')
+        err, code = validate_json_fields('ParamData', 'VarData', 'DualData', 'IndicatorData')
         if err:
             return err, code
         ParamData = request.json['ParamData']
         VarData = request.json['VarData']
+        DualData = request.json['DualData']
+        IndicatorData = request.json['IndicatorData']
 
         paramPath = Path(Config.DATA_STORAGE, 'Parameters.json')
         varPath = Path(Config.DATA_STORAGE, 'Variables.json')
+        dualPath = Path(Config.DATA_STORAGE, 'Duals.json')
+        indicatorPath = Path(Config.DATA_STORAGE, 'Indicators.json')
         File.writeFile( ParamData, paramPath)
         File.writeFile( VarData, varPath)
+        File.writeFile( DualData, dualPath)
+        File.writeFile( IndicatorData, indicatorPath)
         response = {
-            "message": "You have updated parameters & variables data!",
+            "message": "You have updated parameters, variables, duals and indicators data!",
             "status_code": "success"
         }
-       
+
         return jsonify(response), 200
     except(IOError):
         return jsonify('No existing cases!'), 404

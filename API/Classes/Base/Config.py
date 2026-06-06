@@ -123,74 +123,10 @@ EMIS_GROUPS = ('RYE', 'RYTE', 'RYTEM')
 SINGLE_TECH_GROUPS = ['RT']
 SINGLE_EMIS_GROUPS = ['RE']
 
-#full var list 38
-VARIABLES_C = {
-        'NewCapacity':['r','t','y'],
-        'AccumulatedNewCapacity':['r','t','y'],
-        'TotalCapacityAnnual':['r','t','y'],
-        'CapitalInvestment':['r','t','y'],
-        'AnnualVariableOperatingCost':['r','t','y'],
-        'AnnualFixedOperatingCost':['r','t','y'],
-        'SalvageValue':['r','t','y'],
-        'DiscountedSalvageValue':['r','t','y'],
-        'TotalTechnologyAnnualActivity':['r','t','y'],
-        'RateOfActivity':['r','l','t','m','y'],
-        'RateOfTotalActivity':['r','t','l','y'],
-        'Demand':['r','l','f','y'],
-        'TotalAnnualTechnologyActivityByMode':['r','t','m','y'],
-        'TotalTechnologyModelPeriodActivity':['r','t'],
-        'ProductionByTechnology':['r','l','t','f','y'],
-        'ProductionByTechnologyAnnual':['r','t','f','y'],
-        'AnnualTechnologyEmissionByMode':['r','t','e','m','y'],
-        'EmissionByActivityChange':['r','t','e','m','y'],
-        'AnnualTechnologyEmission':['r','t','e','y'],
-        'AnnualEmissions':['r','e','y'],
-        'DiscountedTechnologyEmissionsPenalty':['r','t','y'],
-        'TechnologyEmissionsPenalty':['r','t','y'],
-        'RateOfProductionByTechnology':['r','l','t','f','y'],
-        'RateOfUseByTechnology':['r','l','t','f','y'],
-        'UseByTechnology':['r','l','t','f','y'],
-        'UseByTechnologyAnnual':['r','t','f','y'],
-        'RateOfProductionByTechnologyByMode':['r','l','t','m','f','y'],
-        'RateOfUseByTechnologyByMode':['r','l','t','m','f','y'],
-        'TechnologyActivityChangeByMode':['r','t','m','y'],
-        'TechnologyActivityChangeByModeCostTotal':['r','t','m','y'],
-        'InputToNewCapacity':['r','t','f','y'],
-        'InputToTotalCapacity':['r','t','f','y'],
-        'DiscountedCapitalInvestment':['r','t','y'],
-        'DiscountedOperatingCost':['r','t','y'],
-        'TotalDiscountedCostByTechnology':['r','t','y'],
-        'NewStorageCapacity':['r','s','y'],
-        'SalvageValueStorage':['r','s','y'],
-        'NumberOfNewTechnologyUnits':['r','t','y'],
-        'Trade':['r','rr','l','f','y'],
-        'RateOfNetStorageActivity':['r','s','ls','ld','lh','y'],
-        'NetChargeWithinDay': ['r','s','ls','ld','lh','y'],
-        'NetChargeWithinYear':['r','s','ls','ld','lh','y'],
-        'StorageLevelYearStart': ['r','s','y'],
-        'StorageLevelYearFinish': ['r','s','y'],
-        'StorageLevelSeasonStart':['r','s','ls','y'],
-        'StorageLevelSeasonFinish':['r','s','ls','y'],
-        'StorageLevelDayTypeStart': ['r','s','ls','ld','y'],
-        'StorageLevelDayTypeFinish': ['r','s','ls','ld','y'],
-        'AccumulatedNewStorageCapacity':['r','s','y'],
-        'StorageUpperLimit':['r','s','y'],
-        'CapitalInvestmentStorage':['r','s','y'],
-        'DiscountedCapitalInvestmentStorage':['r','s','y'],
-        'DiscountedSalvageValueStorage':['r','s','y'],
-        'TotalDiscountedStorageCost':['r','s','y'],
-        'EBb4_EnergyBalanceEachYear4_ICR': ['r','f','y'],
-        'E8_AnnualEmissionsLimit': ['r','e','y'],
-        'UDC1_UserDefinedConstraintInequality': ['r','cn','y'],
-        'UDC2_UserDefinedConstraintEquality': ['r','cn','y']
-    }
-
-DUALS = {
-    'EBb4_EnergyBalanceEachYear4_ICR': ['r','f','y'],
-    'E8_AnnualEmissionsLimit': ['r','e','y'],
-    'UDC1_UserDefinedConstraintInequality': ['r','cn','y'],
-    'UDC2_UserDefinedConstraintEquality': ['r','cn','y']
-}
+# Variable and dual definitions previously lived here as `VARIABLES_C` and
+# `DUALS`. Both moved to data files in #460 (Variables.json / Duals.json) with
+# a `setrelation` field on each entry, accessed at runtime via
+# OsemosysClass.VAR_BY_NAME / DUALS_BY_NAME — see docs/UPSTREAM_SYNC.md.
 
 #needed for validation of inputs
 PARAMETERS_C = {

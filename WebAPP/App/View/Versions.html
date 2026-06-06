@@ -1,4 +1,13 @@
 
+<h3>MUIO ver.5.6.0, <small>20260601</small></h3>
+<ol style="font-style: italic; font-weight: normal;">
+    <li><kbd style="font-weight: bold; background-color:#6FB3E0">Func</kbd>&nbsp;Indicator framework — users can now define custom indicators per case (e.g., production intensity by technology) that flow through to the result viewer.</li>
+    <li><kbd style="font-weight: bold; background-color:#6FB3E0">Func</kbd>&nbsp;Dual variables (shadow prices for emission limits, energy balance, and user-defined constraints) now live in a dedicated <code>Duals.json</code> data file and persist through the Save flow.</li>
+    <li><kbd style="font-weight: bold; background-color:#33cc33">Tech</kbd>&nbsp;Solver discovery extended with macOS Homebrew and Linux distro paths as a fourth fallback tier. The solver subprocess now only sets <code>cwd</code> to the solver folder when running a bundled binary, so system installs no longer run from <code>/usr/bin</code>.</li>
+    <li><kbd style="font-weight: bold; background-color:#c74219">Code</kbd>&nbsp;Data-driven schema: <code>Variables.json</code>, <code>Duals.json</code>, <code>Indicators.json</code>, and <code>Parameters.json</code> now carry <code>setrelation</code> and <code>name</code> per entry, matching MUIO 5.6. Legacy <code>Config.VARIABLES_C</code>/<code>Config.DUALS</code> Python dicts removed.</li>
+    <li><kbd style="font-weight: bold; background-color:#c74219">Code</kbd>&nbsp;Backend cleanup: removed roughly 1,500 lines of dormant backup methods from <code>DataFileClass</code>; <code>OsemosysClass</code> refactored to use the shared <code>HelpersClass</code> for parameter, variable, and indicator building.</li>
+</ol>
+
 <h3>MUIO ver.5.5.0, <small>20260331</small></h3>
 <ol style="font-style: italic; font-weight: normal;">
     <li><kbd style="font-weight: bold; background-color:#6FB3E0">Func</kbd>&nbsp;Added DataFile diagnostics for viewing the current model file and runtime log from the UI.</li>

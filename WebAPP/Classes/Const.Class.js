@@ -68,7 +68,7 @@ export const VAR_TECH_GROUPS = ['RT', 'RYT', 'RYTM', 'RYTC', 'RYTE', 'RYTEM', 'R
 //export const VAR_TECH_GROUPS = ['RT', 'RYT', 'RYTM', 'RYTMTs']
 //export const VAR_TECH_COM_GROUPS = ['RYTC','RYTCMTs']
 
-export const VAR_COMM_GROUPS = ['RYTC','RYCTs','RYTCMTs']
+export const VAR_COMM_GROUPS = ['RYTC','RYCTs','RYTCMTs', 'RYC']
 //export const VAR_COMM_GROUPS = ['RYCTs']
 export const VAR_EMIS_GROUPS = ['RYE', 'RYTE', 'RYTEM']
 
@@ -265,13 +265,19 @@ export const UNITS =
 
 ];
 
-export const TAGS = 
+export const TAGS =
 [
     {id:1, name:"Equality"},
     {id:0, name:"Inequality"},
 ];
 
-// export const STORAGE_OPERATIONS = 
+// export const INDICATOR_TYPE =
+// [
+//     {id:1, name:"Production intensity"},
+//     {id:2, name:"Use intensity"},
+// ];
+
+// export const STORAGE_OPERATIONS =
 // [
 //     {id:1, name:"Yearly"},
 //     {id:0, name:"Daily"},

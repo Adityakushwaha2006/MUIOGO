@@ -22,6 +22,10 @@ export default class Pivot {
                     promise.push(resData);
                     const VARIABLES = Osemosys.getParamFile('Variables.json');
                     promise.push(VARIABLES);
+                    const INDICATORS = Osemosys.getParamFile('Indicators.json');
+                    promise.push(INDICATORS);
+                    const DUALS = Osemosys.getParamFile('Duals.json');
+                    promise.push(DUALS);
                     const VIEWS = Osemosys.getResultData(casename,'viewDefinitions.json');
                     promise.push(VIEWS);
                     const DATA = Osemosys.getResultData(casename, 'RYT.json');
@@ -37,9 +41,9 @@ export default class Pivot {
                     // throw new Error('No model selected');
                 }
             })
-            .then(data => {      
-                let [casename, genData, resData, VARIABLES, VIEWS, DATA] = data;         
-                let model = new Model(casename, genData, resData, VARIABLES, DATA, VIEWS);
+            .then(data => {
+                let [casename, genData, resData, VARIABLES, INDICATORS, DUALS, VIEWS, DATA] = data;
+                let model = new Model(casename, genData, resData, VARIABLES, INDICATORS, DUALS, DATA, VIEWS);
                 this.initPage(model);
             })
             .catch(error => {
@@ -64,6 +68,10 @@ export default class Pivot {
                 promise.push(resData);
                 const VARIABLES = Osemosys.getParamFile('Variables.json');
                 promise.push(VARIABLES);
+                const INDICATORS = Osemosys.getParamFile('Indicators.json');
+                promise.push(INDICATORS);
+                const DUALS = Osemosys.getParamFile('Duals.json');
+                promise.push(DUALS);
                 const VIEWS = Osemosys.getResultData(casename, 'viewDefinitions.json');
                 promise.push(VIEWS);
                 const DATA = Osemosys.getResultData(casename, 'RYT.json');
@@ -71,9 +79,8 @@ export default class Pivot {
                 return Promise.all(promise);
             })
             .then(data => {
-                
-                let [casename, genData, resData, VARIABLES, VIEWS, DATA] = data;
-                let model = new Model(casename, genData, resData, VARIABLES, DATA, VIEWS);
+                let [casename, genData, resData, VARIABLES, INDICATORS, DUALS, VIEWS, DATA] = data;
+                let model = new Model(casename, genData, resData, VARIABLES, INDICATORS, DUALS, DATA, VIEWS);
                 model.refreshPage = true;
                 this.initPage(model);
                 //this.initEvents(model);
