@@ -51,44 +51,6 @@ def _numeric_matrix(records: list) -> np.ndarray:
     return np.array(rows, dtype=float)
 
 
-def _print_proof(title, label_a, table_a, label_b, table_b, mat_a, mat_b,
-                 atol, rtol, header_lines=()):
-    """
-    Print a human-readable parity proof to stdout (visible under `pytest -s`).
-
-    Shows the two tables side by side, the element-wise absolute difference, and
-    the headline max/mean diff against the tolerance. This is the artifact handed
-    to maintainers: it makes a passing run show its actual numbers instead of just
-    a green dot. `table_a`/`table_b` are lists of macro-table records (dicts);
-    `mat_a`/`mat_b` are their numeric matrices from _numeric_matrix.
-    """
-    bar = "=" * 80
-    diff = np.abs(mat_a - mat_b)
-    passed = np.allclose(mat_a, mat_b, atol=atol, rtol=rtol)
-
-    pd.set_option("display.max_columns", None)
-    pd.set_option("display.width", 200)
-    pd.set_option("display.float_format", lambda v: f"{v: .10f}")
-
-    print("\n" + bar)
-    print(title)
-    print(bar)
-    for line in header_lines:
-        print(line)
-    print(f"\n----- {label_a} -----")
-    print(pd.DataFrame(table_a).to_string(index=False))
-    print(f"\n----- {label_b} -----")
-    print(pd.DataFrame(table_b).to_string(index=False))
-    print("\n----- element-wise |A - B| (numeric cells, rows=vars, cols=years/SS) -----")
-    print(np.array2string(diff, precision=3, max_line_width=200))
-    print(f"\nmatrix shape            : {mat_a.shape}")
-    print(f"max  |A - B|            : {diff.max():.3e}")
-    print(f"mean |A - B|            : {diff.mean():.3e}")
-    print(f"tolerance (atol, rtol)  : {atol:.0e}, {rtol:.0e}")
-    print(f"RESULT                  : {'PASS' if passed else 'FAIL'}")
-    print(bar + "\n")
-
-
 def _run_standalone(base_spec: dict, reform_spec: dict, workdir: Path) -> list:
     """
     Path A: run OG-Core directly, like run_ogcore_example.py. Uses the same
@@ -178,22 +140,6 @@ def test_pipeline_equivalence_reduced(isolated_storage, tmp_path):
     mat_A = _numeric_matrix(records_A)
     mat_B = _numeric_matrix(records_B)
 
-    # Proof artifact: print both paths' numbers and their difference (see -s).
-    _print_proof(
-        "PARITY PROOF (Tier 1, REDUCED): standalone OG-Core vs ingestion layer",
-        "Path A: standalone OG-Core", records_A,
-        "Path B: our ingestion layer", records_B,
-        mat_A, mat_B, atol=1e-8, rtol=1e-8,
-        header_lines=(
-            f"dimensions  : S={base_spec.get('S', '?')}, T={base_spec.get('T', '?')}, "
-            f"J={len(base_spec.get('cit_rate', [[None]]))}",
-            f"policy      : baseline cit_rate={base_spec['cit_rate']} -> "
-            f"reform cit_rate={reform_spec['cit_rate']}",
-            "metric      : macro_table pct_diff, vars " + ", ".join(MACRO_VARS),
-            "claim       : identical inputs, identical outputs => layer adds zero distortion",
-        ),
-    )
-
     assert mat_A.shape == mat_B.shape, (mat_A.shape, mat_B.shape)
     assert np.allclose(mat_A, mat_B, atol=1e-8, rtol=1e-8), (
         "Ingestion layer diverges from standalone OG-Core.\n"
@@ -225,24 +171,6 @@ def test_pipeline_matches_official_gold(isolated_storage):
     numeric_cols = [c for c in expected.columns
                     if c not in ("Variable",) and not c.startswith("Unnamed")]
     mat_expected = expected[numeric_cols].to_numpy(dtype=float)
-
-    # Display table for the official side, without the bare index column.
-    label_cols = (["Variable"] if "Variable" in expected.columns else []) + numeric_cols
-    expected_records = expected[label_cols].to_dict(orient="records")
-
-    # Proof artifact: print our full-dimension output beside the official CSV.
-    _print_proof(
-        "PARITY PROOF (Tier 2, GOLD): ingestion layer vs official expected CSV",
-        "official expected CSV (OG-Core v0.15.13)", expected_records,
-        "Path B: our ingestion layer (full S=80, T=320)", records_B,
-        mat_expected, mat_B, atol=1e-3, rtol=1e-2,
-        header_lines=(
-            f"policy      : baseline cit_rate={base_spec['cit_rate']} -> "
-            f"reform cit_rate={reform_spec['cit_rate']}",
-            "metric      : macro_table pct_diff, vars " + ", ".join(MACRO_VARS),
-            "note        : looser tol (1e-3) since the reference CSV is stored rounded",
-        ),
-    )
 
     assert mat_B.shape == mat_expected.shape, (mat_B.shape, mat_expected.shape)
     assert np.allclose(mat_B, mat_expected, atol=1e-3, rtol=1e-2), (

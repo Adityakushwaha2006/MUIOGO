@@ -27,11 +27,7 @@ htmlcov/
 dask-worker-space/
 dask-scratch-space/
 
-# Proof-run transcripts from the OG-Core pipeline tests (handed to maintainers,
-# not tracked in the repo)
-ogcore_proof_run_*.log
-
-# Internal planning notes: working scratch, not a shipped artifact
+# Internal planning notes — working scratch, not a shipped artifact
 personal_notes/
 
 # OS artifacts
