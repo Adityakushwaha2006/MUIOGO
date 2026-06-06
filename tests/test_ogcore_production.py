@@ -2,14 +2,14 @@
 Production-context execution test.
 
 In deployment the app is served by waitress, which dispatches each request on a
-worker thread from a pool — NOT the main thread. OGCoreRunner.run() spins up a
-PROCESS-based Dask cluster, and process spawning from a non-main thread on
-Windows is the one execution path not exercised by the other suites (which run
-on pytest's / a script's main thread).
+worker thread from a pool, not the main thread. OGCoreRunner.run() spins up a
+process-based Dask cluster, and process spawning from a non-main thread on
+Windows is the one execution path the other suites don't cover (they run on
+pytest's or a script's main thread).
 
 This test runs a full reduced baseline (SS + TPI, so the client.scatter path is
-exercised too) from inside a worker thread and asserts it completes — proving
-the client spawns and the model solves in the real server threading context.
+exercised too) from inside a worker thread and asserts it completes, proving the
+client spawns and the model solves in the real server threading context.
 
 Marked ``slow`` (one ~2-minute solve); opt in with ``pytest -m slow``.
 """
@@ -41,7 +41,7 @@ def test_run_from_worker_thread(isolated_storage):
     def _worker():
         try:
             result["resp"] = OGCoreRunner("verif").run("Base", time_path=True)
-        except BaseException as exc:  # noqa: BLE001 — capture anything to fail the assert
+        except BaseException as exc:  # noqa: BLE001 (capture anything so the assert can fail)
             result["exc"] = exc
 
     t = threading.Thread(target=_worker, name="waitress-like-worker")

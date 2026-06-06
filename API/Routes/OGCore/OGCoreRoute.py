@@ -2,9 +2,9 @@
 OG-Core API blueprint.
 
 HTTP contract for the OG-Core standalone module. Sits parallel to the CLEWS
-blueprints — same conventions (validate_json_fields, Config.validate_path,
-status_code in JSON bodies) but a separate ``/ogc`` URL namespace and a
-separate session key (``ogccase`` vs CLEWS ``osycase``).
+blueprints and follows the same conventions (validate_json_fields,
+Config.validate_path, status_code in JSON bodies), but uses a separate /ogc URL
+namespace and a separate session key (ogccase, versus the CLEWS osycase).
 
 All filesystem-touching routes pass user input through Config.validate_path
 before constructing paths, to block traversal.
@@ -35,11 +35,12 @@ _RUN_NAME_FIELDS = ("run_name", "base_run", "reform_run", "baseline_run_name")
 def _block_path_traversal():
     """
     Single choke point: validate every user-supplied name that flows into a
-    filesystem path (casename + any run-name field), from JSON body, form, or
-    query string. Mirrors the CLEWS Config.validate_path sanitizer convention
-    and guarantees no OG-Core route can be reached with a traversal payload —
-    closing the gap where per-run routes (notably deleteRun's rmtree) took
-    run_name straight into a path. Returns 400 and short-circuits on any escape.
+    filesystem path (casename plus any run-name field), whether it arrives in the
+    JSON body, form, or query string. This follows the CLEWS Config.validate_path
+    sanitizer convention so no OG-Core route can be reached with a traversal
+    payload. It closes the gap where per-run routes (notably deleteRun's rmtree)
+    took run_name straight into a path. Returns 400 and short-circuits on any
+    escape.
     """
     src: dict = {}
     if request.is_json:
@@ -66,7 +67,7 @@ def _block_path_traversal():
                     return jsonify({"message": f"Invalid {field}.", "status_code": "error"}), 400
     except PermissionError:
         return jsonify({"message": "Invalid path.", "status_code": "error"}), 400
-    return None  # validation passed — continue to the view
+    return None  # validation passed, continue to the view
 
 
 # ── Session ────────────────────────────────────────────────────────────────
@@ -157,7 +158,7 @@ def ogc_get_parameter_schema():
     """OG-Core's user-facing parameter metadata (labels, defaults, ranges)."""
     try:
         return jsonify(load_parameter_schema()), 200
-    except Exception as exc:  # noqa: BLE001 — surface ogcore-not-installed etc.
+    except Exception as exc:  # noqa: BLE001 (report ogcore-not-installed and similar)
         return jsonify({"message": str(exc), "status_code": "error"}), 500
 
 

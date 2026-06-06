@@ -1,27 +1,27 @@
 """
-OG-Core case and run management — disk-backed CRUD.
+OG-Core case and run management (disk-backed CRUD).
 
-This class owns the on-disk layout for OG-Core cases. It is the OG-Core
-counterpart to the CLEWS ``Case``/``DataFile`` classes, but it does NOT execute
-the model — execution lives in ``OGCoreRunnerClass``. This separation keeps
-filesystem bookkeeping independent of the (heavy) OG-Core import.
+This is the OG-Core counterpart to the CLEWS Case/DataFile classes. It owns the
+on-disk layout for OG-Core cases but does not execute the model; execution lives
+in OGCoreRunnerClass. Keeping the two apart means this file never has to import
+the heavy OG-Core package just to read or write a case.
 
 On-disk layout owned by this class::
 
     OGC_DATA_STORAGE/<casename>/
         genData.json              case metadata + run index
         res/<runname>/
-            ogcParams.json        JSON-serialisable parameter overrides (og_spec)
+            ogcParams.json        JSON parameter overrides (the og_spec dict)
             ogcTaxParams.pkl      cloudpickled tax-function objects (mono/mono2D only)
             run_meta.json         run type, baseline path, time_path, status, timestamps
-            SS/                   (created here; SS_vars.pkl written by OG-Core)
-            TPI/                  (created here; TPI_vars.pkl written by OG-Core)
+            SS/                   created here; SS_vars.pkl is written by OG-Core
+            TPI/                  created here; TPI_vars.pkl is written by OG-Core
 
-Parameters are stored PER RUN, not per case. In OG-Core a baseline and a reform
-are the same model with different policy parameters — the reform IS the policy
-change — so each run carries its own complete og_spec. This mirrors OG-Core
-itself, which writes a separate ``model_params.pkl`` into every run's output
-directory. A case is purely an organisational container for related runs.
+Parameters live per run, not per case. In OG-Core a baseline and a reform are the
+same model with different policy parameters (the reform is the policy change), so
+each run keeps its own complete og_spec. This mirrors OG-Core itself, which writes
+a separate model_params.pkl into every run's output directory. A case is just an
+organisational container for related runs.
 """
 
 from __future__ import annotations
@@ -40,10 +40,10 @@ logger = logging.getLogger(__name__)
 # Keys an uploaded mono/mono2D tax-function pickle must contain.
 _REQUIRED_TAX_KEYS = {"tax_func_type", "etr_params", "mtrx_params", "mtry_params"}
 
-# Names that are valid OG-Core labels but ILLEGAL or dangerous as directory
-# names. A case/run name becomes a filesystem directory, so it must be a safe
-# single path component — otherwise mkdir raises an opaque OSError (or silently
-# creates a reserved device path on Windows).
+# Names that are fine as OG-Core labels but illegal or dangerous as directory
+# names. A case/run name becomes a directory, so it has to be a safe single path
+# component. Otherwise mkdir throws an opaque OSError, or on Windows quietly
+# creates a reserved device path.
 _RESERVED_NAMES = (
     {"CON", "PRN", "AUX", "NUL"}
     | {f"COM{i}" for i in range(1, 10)}
@@ -126,8 +126,8 @@ class OGCoreCase:
 
     def save_case(self, gen_data: dict) -> dict:
         """
-        Update an existing case's metadata. The run index and version are
-        preserved from the existing file — a metadata edit must never wipe runs.
+        Update an existing case's metadata. The run index and version are carried
+        over from the existing file so that editing case details never wipes runs.
         """
         existing = self.gen_data
         gen_data["ogc-runs"] = existing.get("ogc-runs", [])
@@ -163,21 +163,21 @@ class OGCoreCase:
         """
         Validate and store an uploaded tax-function pickle.
 
-        Tax functions of type ``mono``/``mono2D`` are Python callables and
-        cannot live in JSON; the user uploads them as a (cloud)pickle produced
-        by ``ogcore.txfunc.tax_func_estimate``. We validate the required keys
-        are present before persisting.
+        mono/mono2D tax functions are Python callables, so they cannot live in
+        JSON. The user uploads them as a (cloud)pickle produced by
+        ogcore.txfunc.tax_func_estimate, and we check the required keys are
+        present before saving.
 
-        Trust model: this is a local, single-user desktop application. The user
-        uploads a file they produced themselves with OG-Core — the same trust
-        boundary as running OG-Core directly. We do not load arbitrary remote
-        pickles.
+        Unpickling is only safe here because this is a local, single-user desktop
+        app: the user is loading a file they produced themselves with OG-Core,
+        which is the same trust boundary as running OG-Core directly. We never
+        load remote pickles.
         """
         import cloudpickle
 
         try:
             tax_params = cloudpickle.loads(pkl_bytes)
-        except Exception as exc:  # noqa: BLE001 — surface any deserialisation failure
+        except Exception as exc:  # noqa: BLE001 (any deserialisation failure is reported below)
             logger.warning("Tax-param pickle could not be deserialised for '%s': %s",
                            self.casename, exc)
             return {"message": "Could not deserialize pkl file.", "status_code": "error"}
@@ -208,8 +208,8 @@ class OGCoreCase:
 
     def get_tax_params_info(self, run_name: str) -> dict:
         """
-        Metadata about a run's loaded tax params. Does NOT return the function
-        objects themselves — they are not JSON-serialisable.
+        Metadata about a run's loaded tax params. It does not return the function
+        objects themselves, since they are not JSON-serialisable.
         """
         path = self.run_tax_params_path(run_name)
         if not path.exists():
@@ -237,14 +237,13 @@ class OGCoreCase:
         """
         Create a run directory and register it in the case run index.
 
-        ``params`` is the run's initial og_spec; it is written to the run's
-        own ogcParams.json. A run can therefore be created with its full policy
-        in one call, or created empty and have params saved later via save_params.
+        `params` is the run's initial og_spec and gets written to the run's own
+        ogcParams.json, so a run can be created with its full policy in one call,
+        or created empty and filled in later via save_params.
 
-        A reform run is refused unless its referenced baseline exists AND has
-        completed — OG-Core's reform TPI reads the baseline SS/TPI pickles as
-        mathematical inputs, so a reform on an incomplete baseline is invalid by
-        construction.
+        A reform run is refused unless its baseline exists and has finished.
+        OG-Core's reform TPI reads the baseline's SS/TPI pickles as inputs, so a
+        reform on an incomplete baseline simply cannot run.
         """
         if not is_safe_name(run_name):
             return {"message": "Invalid run name.", "status_code": "error"}
@@ -318,13 +317,13 @@ class OGCoreCase:
 
     def get_runs(self) -> list:
         """
-        Run index enriched with live status from each run's run_meta.json.
-        A run present in the index but missing its meta file is reported as
-        pending (defensive — should not happen in normal operation).
+        The run index, with each run's live status pulled from its run_meta.json.
+        A run that is listed in the index but missing its meta file is reported as
+        pending; that is a defensive case and should not happen normally.
 
-        Each returned entry is a COPY — the transient status fields are never
-        written back into the cached gen_data, so a later create_run/delete_run
-        on the same instance cannot leak run_meta state into genData.json.
+        Each entry is a copy, so the transient status fields are never written back
+        into the cached gen_data. That stops a later create_run/delete_run on the
+        same instance from leaking run_meta state into genData.json.
 
         A missing case returns an empty list rather than raising.
         """

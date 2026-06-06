@@ -1,11 +1,11 @@
 """
 OG-Core ingestion-layer edge / parity tests.
 
-Focus: inputs that are VALID for a direct OG-Core call but exercise the seams
-our wrapper adds (JSON output serialization, filesystem path derivation, error
-pass-through). These guard against silent divergence between "direct OG-Core"
-and "via our pipeline" — the cases OG-Core itself would accept but our extra
-machinery could mishandle.
+Focus: inputs that are valid for a direct OG-Core call but exercise the seams our
+wrapper adds (JSON output serialization, filesystem path derivation, error
+pass-through). These guard against silent divergence between "direct OG-Core" and
+"via our pipeline": the cases OG-Core itself would accept but our extra machinery
+could mishandle.
 
 Most tests are pure-Python and fast (default suite). The one test that imports
 OG-Core to confirm faithful error pass-through is marked ``slow``.
@@ -50,7 +50,7 @@ def test_serialize_numpy_maps_non_finite_to_null():
 
 
 def test_serialized_output_is_strict_json():
-    """No NaN/Infinity tokens — a browser's JSON.parse must not choke."""
+    """No NaN/Infinity tokens, so a browser's JSON.parse will not choke."""
     out = _serialize_numpy({"v": np.array([np.nan, np.inf, 3.0])})
     blob = json.dumps(out)
     assert "NaN" not in blob and "Infinity" not in blob

@@ -7,14 +7,14 @@ reads the resulting on-disk pickles back into JSON-safe structures for the API.
 
 Design notes
 ------------
-* OG-Core is a heavy import (numba, dask, scipy). Every ``ogcore`` import is
-  deferred to the method that needs it so Flask startup stays fast and the API
-  remains importable even if OG-Core is not installed.
-* Execution is synchronous and blocking — matching the CLEWS solver pattern
-  (``subprocess.run``). This is intentional for a single-user local deployment.
+* OG-Core is a heavy import (numba, dask, scipy). Every ogcore import is deferred
+  to the method that needs it, so Flask startup stays fast and the API stays
+  importable even when OG-Core is not installed.
+* Execution is synchronous and blocking, mirroring the CLEWS solver pattern
+  (subprocess.run). That is deliberate for a single-user local deployment.
 * Reform runs depend on a completed baseline. A reform TPI reads the baseline's
-  TPI pickle as a mathematical input (the baseline GDP path drives the reform
-  fiscal rule), so we refuse a reform TPI whose baseline was run SS-only.
+  TPI pickle as an input (the baseline GDP path drives the reform fiscal rule),
+  so we refuse a reform TPI whose baseline was run SS-only.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ from Classes.OGCore.OGCoreClass import OGCoreCase
 
 logger = logging.getLogger(__name__)
 
-# Defaults larger than this many leaf elements are calibration arrays, not
-# form-renderable inputs — keep their metadata but drop the bulky default value.
+# A default with more leaf elements than this is a calibration array rather than
+# a form-renderable input. We keep its metadata but drop the bulky default value.
 _SCHEMA_MAX_DEFAULT_ELEMENTS = 100
 
 
@@ -53,16 +53,16 @@ def load_parameter_schema() -> dict:
     """
     User-facing OG-Core parameter metadata, for the frontend to build input forms.
 
-    Read from the INSTALLED ogcore's ``default_parameters.json`` — located via
-    ``find_spec`` WITHOUT importing the heavy package — so the schema always
-    matches the running OG-Core version and can never drift. Returns a dict
-    keyed by parameter name::
+    We read the installed ogcore's default_parameters.json, locating it with
+    find_spec so we never import the heavy package. Because it comes from the
+    installed copy, the schema always matches the running OG-Core version and
+    cannot drift. Returns a dict keyed by parameter name::
 
         {param: {title, description, section, subsection, type, default, min, max}}
 
-    Large calibration arrays (e.g. ability/demographic matrices) keep their
-    metadata but report ``default: null`` and ``large: true`` so the response
-    stays small. Cached for the process (the file does not change at runtime).
+    Large calibration arrays (for example ability/demographic matrices) keep their
+    metadata but report default: null and large: true, which keeps the response
+    small. Cached for the process, since the file does not change at runtime.
     """
     spec = importlib.util.find_spec("ogcore")
     if spec is None or not spec.origin:
@@ -103,17 +103,17 @@ def load_parameter_schema() -> dict:
 
 
 def _num_workers() -> int:
-    """Worker count for the Dask cluster — mirrors run_ogcore_example.py."""
+    """Worker count for the Dask cluster, matching run_ogcore_example.py."""
     return min(multiprocessing.cpu_count() or 1, 7)
 
 
 def _quiet_distributed_logs() -> None:
     """
-    Suppress Dask/distributed INFO chatter — including the harmless
-    CommClosedError tracebacks logged at INFO level when a worker cluster is
-    torn down at the end of a run. These are expected shutdown notices, not
-    errors; left at INFO they spam the application log on every run. Real
-    problems (WARNING/ERROR) still surface.
+    Quiet down Dask/distributed INFO chatter, including the harmless
+    CommClosedError tracebacks logged at INFO level when a worker cluster is torn
+    down at the end of a run. Those are expected shutdown notices rather than
+    errors, and at INFO they spam the application log on every run. Real problems
+    (WARNING/ERROR) still come through.
     """
     for name in ("distributed", "distributed.batched", "distributed.scheduler",
                  "distributed.worker", "distributed.nanny", "distributed.core",
@@ -124,10 +124,10 @@ def _quiet_distributed_logs() -> None:
 # Default macro variables used across the table endpoints.
 _DEFAULT_MACRO_VARS = ["Y", "C", "K", "L", "r", "w"]
 
-# Structural / dimensional parameters that a reform MUST share with its
-# baseline. A reform reads the baseline's SS pickle (arrays shaped by S, J) and
-# TPI pickle (length T), and macro_table asserts equal start_year — so a
-# mismatch on any of these is a hard incompatibility, not a policy choice.
+# Structural / dimensional parameters that a reform must share with its baseline.
+# A reform reads the baseline's SS pickle (arrays shaped by S, J) and TPI pickle
+# (length T), and macro_table asserts equal start_year. A mismatch on any of
+# these is a hard incompatibility, not a policy choice.
 _STRUCTURAL_FIELDS = ("S", "T", "J", "M", "I", "start_year")
 
 
@@ -136,15 +136,15 @@ def _serialize_numpy(obj):
     Recursively convert numpy/Python values to STRICT-JSON-safe types.
 
     Two jobs:
-      1. numpy → native (Flask's jsonify cannot serialise numpy types).
-      2. Non-finite floats (NaN, +/-Inf) → None. OG-Core outputs can legitimately
+      1. numpy to native (Flask's jsonify cannot serialise numpy types).
+      2. Non-finite floats (NaN, +/-Inf) to None. OG-Core outputs can legitimately
          contain NaN/Inf (undefined periods, ratios over zero, ceilings). Left
-         alone, jsonify emits the bare tokens ``NaN``/``Infinity`` which are NOT
-         valid JSON — a browser's JSON.parse throws. Mapping them to null gives
+         alone, jsonify emits the bare tokens NaN/Infinity, which are not valid
+         JSON and make a browser's JSON.parse throw. Mapping them to null gives
          the frontend a clean gap instead of a parse error.
     """
     if isinstance(obj, np.ndarray):
-        if obj.dtype.kind == "f":  # float array — null out non-finite (vectorised)
+        if obj.dtype.kind == "f":  # float array: null out non-finite (vectorised)
             if np.isfinite(obj).all():
                 return obj.tolist()
             out = obj.astype(object)
@@ -152,7 +152,7 @@ def _serialize_numpy(obj):
             return out.tolist()
         if obj.dtype.kind == "c":  # complex array
             return [_serialize_numpy(x) for x in obj.tolist()]
-        return obj.tolist()  # int / bool / etc. — no non-finite possible
+        return obj.tolist()  # int / bool / etc., no non-finite possible
     if isinstance(obj, np.integer):
         return int(obj)
     if isinstance(obj, np.floating):
@@ -193,15 +193,14 @@ class OGCoreRunner:
         """
         Build a ``Specifications`` object for the given run.
 
-        For standard (``DEP``) tax functions, the override dict is passed
-        straight to ``update_specifications``. For ``mono``/``mono2D`` tax
-        functions, the callable tax-function objects (stored separately in
-        ``ogcTaxParams.pkl`` because they are not JSON-serialisable) are merged
-        INTO the override dict and passed in a single call — letting
-        ``update_specifications`` apply them through its native mono deferral
-        path (pull out of revision → adjust the rest → setattr them back →
-        compute_default_params). This ordering matters: the tax functions must
-        be present before ``compute_default_params`` runs.
+        For standard (DEP) tax functions, the override dict is passed straight to
+        update_specifications. For mono/mono2D tax functions, the callable
+        tax-function objects (stored separately in ogcTaxParams.pkl because they
+        are not JSON-serialisable) are merged into the override dict and passed in
+        one call. That lets update_specifications run them through its native mono
+        deferral path: pull them out of the revision, adjust the rest, set them
+        back, then compute_default_params. The ordering matters, because the tax
+        functions must be in place before compute_default_params runs.
         """
         from ogcore.parameters import Specifications
 
@@ -255,13 +254,13 @@ class OGCoreRunner:
         """
         Execute OG-Core synchronously for a run.
 
-        Two pre-execution guards for reform runs (both fail BEFORE any solve, so
-        the run stays ``pending`` and the user can fix and retry):
+        Two pre-execution guards for reform runs. Both fail before any solve, so
+        the run stays pending and the user can fix it and retry:
 
-        1. Option B — a reform requesting the full transition path requires its
-           baseline to have been completed with ``time_path=True``; otherwise the
-           baseline TPI pickle the reform reads does not exist.
-        2. Structural compatibility — a reform must share S, T, J, M, I and
+        1. Option B: a reform asking for the full transition path needs its
+           baseline to have finished with time_path=True, otherwise the baseline
+           TPI pickle the reform reads does not exist.
+        2. Structural compatibility: a reform must share S, T, J, M, I and
            start_year with its baseline, or the baseline SS/TPI arrays it reads
            are dimensionally incompatible.
         """
@@ -290,7 +289,7 @@ class OGCoreRunner:
         # Build Specifications once (cheap, in-memory). Invalid params raise here.
         try:
             p = self._build_specs(run_name)
-        except Exception as exc:  # noqa: BLE001 — invalid parameters are a run failure
+        except Exception as exc:  # noqa: BLE001 (invalid parameters count as a run failure)
             err_msg = str(exc)
             logger.error("OG-Core spec build failed: case=%s run=%s error=%s",
                          self.casename, run_name, err_msg)
@@ -318,8 +317,8 @@ class OGCoreRunner:
         client = None
         try:
             # OG-Core requires a distributed client: TPI calls client.scatter/
-            # submit/gather unconditionally. We use a process-based LocalCluster
-            # (the OG-Core example's proven config) — the in-process threaded
+            # submit/gather unconditionally. We use a process-based LocalCluster,
+            # which is the OG-Core example's proven config. The in-process threaded
             # cluster (processes=False) has a scatter(broadcast=True) race that
             # deadlocks the TPI loop. Dashboard off; client closed in finally.
             import logging as _logging
@@ -338,7 +337,7 @@ class OGCoreRunner:
             self.case.update_run_status(run_name, "completed")
             logger.info("OG-Core run complete: case=%s run=%s", self.casename, run_name)
             return {"message": "Run completed.", "status_code": "success", "run_name": run_name}
-        except Exception as exc:  # noqa: BLE001 — any failure is reported to caller
+        except Exception as exc:  # noqa: BLE001 (any failure is reported to the caller)
             err_msg = str(exc)
             logger.error(
                 "OG-Core run failed: case=%s run=%s", self.casename, run_name, exc_info=True
@@ -349,14 +348,14 @@ class OGCoreRunner:
             if client is not None:
                 try:
                     client.close()
-                except Exception:  # noqa: BLE001 — cleanup best-effort
+                except Exception:  # noqa: BLE001 (cleanup is best-effort)
                     pass
 
     def validate_params(self, run_name: str) -> dict:
         """
         Validate a run's stored override dict against OG-Core's own validators.
-        Note: this validates the JSON parameters only — mono tax-function
-        objects (stored in the pkl) are not part of this check.
+        This checks the JSON parameters only; the mono tax-function objects stored
+        in the pkl are not part of this check.
         """
         from ogcore.parameters import revision_warnings_errors
 

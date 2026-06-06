@@ -1,7 +1,7 @@
 """
 Fixtures shared across all tests.
 
-API/ is on the path via pyproject.toml so imports just work -- no sys.path hacks needed.
+API/ is on the path via pyproject.toml, so imports just work with no sys.path hacks.
 """
 
 import pytest

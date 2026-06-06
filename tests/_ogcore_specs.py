@@ -19,13 +19,14 @@ def reduced_specs() -> tuple[dict, dict]:
     """
     Baseline + reform og_spec for the reduced tier.
 
-    Hybrid, both halves official: testing_params.json supplies the reduced
-    dimensional arrays (S=40, T=120, J=2) — you cannot just set S=40 on the full
-    spec because OG-Core's default demographic/ability arrays are sized for S=80
-    and do not all auto-interpolate. The official example's fiscal calibration
-    (alpha_T, alpha_G, debt_ratio_ss=1.0) is overlaid because testing_params'
-    bare fiscal closure drives debt into its ceiling and TPI fails to converge.
-    Verified to converge as a standalone baseline+reform in ~3 min/solve.
+    Both halves come from official sources. testing_params.json supplies the
+    reduced dimensional arrays (S=40, T=120, J=2); you cannot just set S=40 on the
+    full spec, because OG-Core's default demographic/ability arrays are sized for
+    S=80 and do not all auto-interpolate. On top of that we overlay the official
+    example's fiscal calibration (alpha_T, alpha_G, debt_ratio_ss=1.0), since
+    testing_params' bare fiscal closure drives debt into its ceiling and TPI fails
+    to converge. Verified to converge as a standalone baseline+reform at roughly
+    3 min/solve.
     """
     with open(TESTING_PARAMS) as f:
         base_spec = json.load(f)

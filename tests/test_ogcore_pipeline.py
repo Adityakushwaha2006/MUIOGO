@@ -4,20 +4,20 @@ OG-Core ingestion-layer verification harness.
 Proves our ingestion layer produces identical results to standalone OG-Core,
 by running the SAME parameters two ways and comparing the headline macro table:
 
-    Path A — standalone OG-Core (the control): Specifications -> runner ->
-             output_tables.macro_table, exactly as run_ogcore_example.py does.
-    Path B — our ingestion layer (under test): OGCoreCase.create_run(params) ->
-             OGCoreRunner.run -> OGCoreRunner.get_macro_table.
+    Path A, standalone OG-Core (the control): Specifications -> runner ->
+            output_tables.macro_table, exactly as run_ogcore_example.py does.
+    Path B, our ingestion layer (under test): OGCoreCase.create_run(params) ->
+            OGCoreRunner.run -> OGCoreRunner.get_macro_table.
 
-If A == B to floating-point precision, our layer adds zero distortion — the
+If A == B to floating-point precision, our layer adds zero distortion, meaning the
 JSON parameter round-trip, the baseline/reform wiring, and the numpy->records
 serialization are all faithful.
 
-Two tiers, BOTH opt-in (never run in the default `pytest` suite):
+Two tiers, both opt-in (neither runs in the default `pytest` suite):
 
-    pytest -m slow   reduced dimensions (OG-Core's own test config) — minutes
+    pytest -m slow   reduced dimensions (OG-Core's own test config), minutes
     pytest -m gold   full dimensions, matched against the committed official
-                     expected_ogcore_example_output.csv — hours
+                     expected_ogcore_example_output.csv, hours
 
 Both tiers run two live solves per path (the "two-solve" equivalence). Fixtures
 are sourced from the pinned v.0.15.13 tag in tests/ogcore_fixtures/.
@@ -53,9 +53,10 @@ def _numeric_matrix(records: list) -> np.ndarray:
 
 def _run_standalone(base_spec: dict, reform_spec: dict, workdir: Path) -> list:
     """
-    Path A — run OG-Core directly, like run_ogcore_example.py. Uses the same
+    Path A: run OG-Core directly, like run_ogcore_example.py. Uses the same
     process-based client and worker count our layer uses, so A and B share an
-    identical execution config (any divergence is then attributable to our layer).
+    identical execution config and any divergence is then attributable to our
+    layer.
     """
     from ogcore.parameters import Specifications
     from ogcore.execute import runner
@@ -93,7 +94,7 @@ def _run_standalone(base_spec: dict, reform_spec: dict, workdir: Path) -> list:
 
 
 def _run_via_layer(base_spec: dict, reform_spec: dict) -> list:
-    """Path B — drive the same computation through our ingestion layer."""
+    """Path B: drive the same computation through our ingestion layer."""
     from Classes.OGCore.OGCoreClass import OGCoreCase
     from Classes.OGCore.OGCoreRunnerClass import OGCoreRunner
 
@@ -119,7 +120,7 @@ def _run_via_layer(base_spec: dict, reform_spec: dict) -> list:
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Tier 1 — REDUCED: equivalence proof (Path A == Path B)
+# Tier 1, REDUCED: equivalence proof (Path A == Path B)
 # ──────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.slow
@@ -147,7 +148,7 @@ def test_pipeline_equivalence_reduced(isolated_storage, tmp_path):
 
 
 # ──────────────────────────────────────────────────────────────────────────
-# Tier 2 — GOLD: full-dimension match vs official expected CSV
+# Tier 2, GOLD: full-dimension match vs official expected CSV
 # ──────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.gold
@@ -157,7 +158,7 @@ def test_pipeline_matches_official_gold(isolated_storage):
     and match the committed expected_ogcore_example_output.csv from the pinned
     v.0.15.13 tag. Tolerance is looser than the equivalence test: the reference
     CSV was generated with a multi-worker Dask client and is stored rounded,
-    whereas we run serially — the equilibrium is the same but the last digits
+    whereas we run serially, so the equilibrium is the same but the last digits
     differ.
     """
     base_spec, reform_spec = official_specs()
