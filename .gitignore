@@ -23,6 +23,13 @@ __pycache__/
 .coverage.*
 htmlcov/
 
+# Dask/distributed local scratch (in case it lands in the repo cwd)
+dask-worker-space/
+dask-scratch-space/
+
+# Internal planning notes — working scratch, not a shipped artifact
+personal_notes/
+
 # OS artifacts
 .DS_Store
 Thumbs.db

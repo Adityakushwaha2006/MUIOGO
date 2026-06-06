@@ -75,6 +75,13 @@ DATA_STORAGE.mkdir(parents=True, exist_ok=True)
 if not os.access(DATA_STORAGE, os.W_OK):
     raise PermissionError(f"Data storage path is not writable: {DATA_STORAGE}")
 
+# OG-Core data storage — parallel namespace to the CLEWS/OSeMOSYS DataStorage.
+# Kept strictly separate so OG-Core cases never collide with OSeMOSYS cases.
+OGC_DATA_STORAGE = WEBAPP_PATH / "DataStorage" / "OGCore"
+OGC_DATA_STORAGE.mkdir(parents=True, exist_ok=True)
+if not os.access(OGC_DATA_STORAGE, os.W_OK):
+    raise PermissionError(f"OGCore data storage path is not writable: {OGC_DATA_STORAGE}")
+
 
 def get_runtime_log_path():
     global _RUNTIME_LOG_PATH

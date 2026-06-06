@@ -34,10 +34,17 @@ ignore = [
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["API"]
+pythonpath = ["API", "tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+# Default run excludes the heavy OG-Core pipeline tests. Opt in with:
+#   pytest -m slow     reduced-dimension equivalence (minutes)
+#   pytest -m gold     full-dimension gold-CSV match (hours)
+addopts = "-v --tb=short -m 'not slow and not gold'"
+markers = [
+    "slow: reduced-dimension OG-Core pipeline equivalence run (opt-in, minutes)",
+    "gold: full-dimension match vs official expected CSV (opt-in, hours)",
+]
 
 # ---------------------------------------------------------------------------
 # coverage
