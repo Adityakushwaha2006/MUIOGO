@@ -1,6 +1,9 @@
 # Demo data archive — hosted as a GitHub release asset, not committed to the repo
 assets/demo-data/CLEWs.Demo.zip
 
+# Claude Code configuration — local tooling only, not a project artifact
+CLAUDE.md
+
 Procfile
 .env
 .runtime/
