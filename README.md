@@ -29,7 +29,7 @@ At the moment, this repository starts from a direct copy baseline of MUIO. The g
 
 - Git:
   - Install: [git-scm.com](https://git-scm.com/downloads)
-- Python 3.10 to 3.12 (recommended: 3.11):
+- Python 3.11 to 3.12 (recommended: 3.11):
   - macOS (in Terminal): `brew install python@3.11`
   - Windows (in PowerShell or Command Prompt): `winget install -e --id Python.Python.3.11`
   - Installer downloads: [python.org macOS](https://www.python.org/downloads/macos/) / [python.org Windows](https://www.python.org/downloads/windows/)
@@ -58,7 +58,8 @@ For setup options, use the "--help" flag:
 
 > **Note:** The setup scripts handle more than Python packages (venv creation,
 > solver installation, demo data). Using them is the recommended onboarding path.
-> MUIOGO currently supports Python 3.10 to 3.12, with Python 3.11 recommended.
+> MUIOGO currently supports Python 3.11 to 3.12, with Python 3.11 recommended.
+> (OG-Core requires Python 3.11 or newer.)
 >
 > Advanced users who want to manage dependencies or packaging manually can use
 > the [Advanced Setup and Packaging](#advanced-setup-and-packaging) section
@@ -101,7 +102,7 @@ Templates:
 ### Advanced Setup and Packaging
 
 If you need to install Python dependencies without the setup scripts, note
-that this manual path still requires a supported Python version (`3.10` to
+that this manual path still requires a supported Python version (`3.11` to
 `3.12`) and does not add compatibility for newer Python releases.
 
 ```bash

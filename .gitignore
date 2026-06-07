@@ -1,6 +1,9 @@
 # Demo data archive — hosted as a GitHub release asset, not committed to the repo
 assets/demo-data/CLEWs.Demo.zip
 
+# Claude Code configuration — local tooling only, not a project artifact
+CLAUDE.md
+
 Procfile
 .env
 .runtime/
@@ -22,6 +25,13 @@ __pycache__/
 .coverage
 .coverage.*
 htmlcov/
+
+# Dask/distributed local scratch (in case it lands in the repo cwd)
+dask-worker-space/
+dask-scratch-space/
+
+# Internal planning notes — working scratch, not a shipped artifact
+personal_notes/
 
 # OS artifacts
 .DS_Store

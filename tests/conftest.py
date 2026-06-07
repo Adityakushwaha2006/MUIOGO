@@ -1,7 +1,9 @@
 """
-Fixtures shared across all tests.
+Fixtures shared across all tests (CLEWS and OG-Core).
 
-API/ is on the path via pyproject.toml so imports just work -- no sys.path hacks needed.
+API/ is on the path via pyproject.toml, so imports just work with no sys.path hacks.
+The OG-Core-specific fixtures (isolated_storage, ogc_client) live in
+tests/ogcore_standalone/conftest.py and inherit app/client from here.
 """
 
 import pytest

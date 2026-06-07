@@ -7,7 +7,7 @@ import warnings
 from logging.handlers import TimedRotatingFileHandler
 
 # Fail fast: unsupported Python hits cryptic pandas/numpy import errors without this.
-SUPPORTED_PYTHON_MIN = (3, 10)
+SUPPORTED_PYTHON_MIN = (3, 11)
 SUPPORTED_PYTHON_MAX = (3, 13)
 
 if not (SUPPORTED_PYTHON_MIN <= sys.version_info[:2] < SUPPORTED_PYTHON_MAX):
@@ -35,6 +35,7 @@ from Routes.Case.CaseRoute import case_api
 from Routes.Case.SyncS3Route import syncs3_api
 from Routes.Case.ViewDataRoute import viewdata_api
 from Routes.DataFile.DataFileRoute import datafile_api
+from Routes.OGCore.OGCoreRoute import ogcore_api
 
 def _configure_logging():
     if getattr(_configure_logging, "_configured", False):
@@ -103,6 +104,7 @@ app.register_blueprint(case_api)
 app.register_blueprint(viewdata_api)
 app.register_blueprint(datafile_api)
 app.register_blueprint(syncs3_api)
+app.register_blueprint(ogcore_api)
 
 CORS(app)
 
