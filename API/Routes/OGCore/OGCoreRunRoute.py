@@ -6,8 +6,11 @@ happen in a separate OG environment driven by the worker layer. See:
     Track1-API-Schema-Discussion/OGCore-API-Schema-FINAL.md
 """
 import csv
+import json
 import os
+import shutil
 import tempfile
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -23,7 +26,7 @@ from flask import (
 
 from Classes.Base import Config
 from Classes.Base.FileClass import File
-from Classes.OGCore import OGTables
+from Classes.OGCore import OGSchema, OGTables
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
 from Classes.OGCore.OGCoreCase import OGCoreCase, is_safe_name
 from Classes.OGCore.OGResults import OGResults
@@ -930,3 +933,158 @@ def downloadResults():
         download_name=f"{casename}_{base_run}_results.csv",
         mimetype="text/csv",
     )
+
+
+# ── parameter form metadata for the active/selected case ─────────────────────
+@ogcore_run_api.route("/getParameterSchema", methods=["GET"])
+def getParameterSchema():
+    casename = request.args.get("casename") or session.get("ogccase")
+    if not casename:
+        return _err("No case selected.")
+    bad = _unsafe_name(casename)
+    if bad:
+        return bad
+    case = OGCoreCase(casename)
+    if not case.case_path.is_dir():
+        return _err("Case not found.", http=404)
+
+    schema, error = OGSchema.build_schema(case)
+    if error is not None:
+        # Only the missing-definitions case is a 404; a not-installed calibration
+        # is a client-state problem the caller can fix by installing it.
+        http = 404 if error == "The calibration's parameter definitions were not found." else 400
+        return _err(error, http=http)
+    return jsonify(schema), 200
+
+
+# ── download the whole case directory as a zip backup ────────────────────────
+@ogcore_run_api.route("/backupCase", methods=["GET"])
+def backupCase():
+    casename = request.args.get("casename")
+    if not casename:
+        return _err("Missing required field: casename")
+    bad = _unsafe_name(casename)
+    if bad:
+        return bad
+
+    case = OGCoreCase(casename)
+    if not case.case_path.is_dir():
+        return _err("Case not found.", http=404)
+
+    fd, zip_path = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            # Arcnames are relative to the case dir root (genData.json at the top),
+            # so restoreCase can read genData.json straight from the archive root.
+            for path in sorted(case.case_path.rglob("*")):
+                if path.is_file():
+                    zf.write(path, path.relative_to(case.case_path).as_posix())
+    except OSError:
+        try:
+            os.unlink(zip_path)
+        except OSError:
+            pass
+        return jsonify(
+            {"message": "Failed to build the backup.", "status_code": "error"}
+        ), 500
+
+    @after_this_request
+    def _cleanup(response):
+        try:
+            os.unlink(zip_path)
+        except OSError:
+            pass
+        return response
+
+    return send_file(
+        zip_path,
+        as_attachment=True,
+        download_name=f"{casename}_ogc_backup.zip",
+        mimetype="application/zip",
+    )
+
+
+def _unsafe_zip_member(member) -> bool:
+    """True if a zip member name is unsafe to extract under the case dir.
+
+    Blocks absolute paths, Windows drive letters, and any parent-directory
+    segment, after normalising backslash separators to forward slashes so a
+    backslash-encoded traversal cannot slip past the segment check.
+    """
+    norm = member.replace("\\", "/")
+    if norm.startswith("/"):
+        return True
+    if len(norm) >= 2 and norm[1] == ":":  # drive-letter prefix like "C:"
+        return True
+    return any(part == ".." for part in norm.split("/"))
+
+
+# ── restore a case from a backup zip ─────────────────────────────────────────
+@ogcore_run_api.route("/restoreCase", methods=["POST"])
+def restoreCase():
+    blocked = _blocked_cross_site()
+    if blocked:
+        return blocked
+
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return _err("No file uploaded.")
+    if not upload.filename.lower().endswith(".zip"):
+        return _err("The backup must be a .zip file.")
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".zip")
+    os.close(fd)
+    try:
+        upload.save(tmp_path)
+        try:
+            zf = zipfile.ZipFile(tmp_path)
+        except zipfile.BadZipFile:
+            return _err("Not a valid backup file.")
+        with zf:
+            names = zf.namelist()
+            # genData.json must sit at the archive root, exactly as backupCase writes it.
+            if "genData.json" not in names:
+                return _err("Not an OG-Core case backup.")
+            try:
+                gen_data = json.loads(zf.read("genData.json").decode("utf-8"))
+            except (OSError, ValueError, zipfile.BadZipFile):
+                return _err("Not an OG-Core case backup.")
+            # A CLEWS backup carries osy-casename; only an OG-Core case has this key.
+            if not isinstance(gen_data, dict) or "ogc-casename" not in gen_data:
+                return _err("Not an OG-Core case backup.")
+
+            target = gen_data.get("ogc-casename")
+            if not is_safe_name(target):
+                return _err("Invalid case name.")
+            target_dir = Path(Config.OGC_CASES_DIR, target)
+            if target_dir.exists():
+                return jsonify(
+                    {"message": "Case already exists.", "status_code": "exist"}
+                ), 200
+
+            # Validate every member before writing anything to disk.
+            for member in names:
+                if _unsafe_zip_member(member):
+                    return _err("The backup contains unsafe paths.")
+
+            # Extract each file member by hand (not extractall) so nothing lands
+            # outside target_dir even if a member survived the checks above.
+            Config.OGC_CASES_DIR.mkdir(parents=True, exist_ok=True)
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                rel = info.filename.replace("\\", "/")
+                dest = target_dir.joinpath(*rel.split("/"))
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as src, open(dest, "wb") as out:
+                    shutil.copyfileobj(src, out)
+
+        return jsonify(
+            {"message": f"Case {target} restored.", "status_code": "success"}
+        ), 200
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
