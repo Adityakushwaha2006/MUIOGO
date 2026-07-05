@@ -13,6 +13,7 @@ from flask import Blueprint, jsonify, request, session
 from Classes.Base import Config
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
 from Classes.OGCore.OGCoreCase import OGCoreCase, is_safe_name
+from Classes.OGCore.RunJob import RunJob
 
 ogcore_run_api = Blueprint("OGCoreRunRoute", __name__, url_prefix="/ogc")
 
@@ -163,6 +164,8 @@ def deleteCase():
     case = OGCoreCase(casename)
     if not case.case_path.is_dir():
         return _err("Case not found.", http=404)
+    if RunJob.case_busy(casename):
+        return _err("A run in this case is running or queued; stop it first.")
     result = case.delete_case()
     session["ogccase"] = None
     return jsonify(result), 200
@@ -248,6 +251,10 @@ def deleteRun():
     in_index = any(r.get("RunName") == run_name for r in case.gen_data.get("ogc-runs", []))
     if not in_index:
         return _err("Run not found.", http=404)
+    if RunJob.case_busy(casename) and (
+        RunJob.is_busy(casename, run_name) or case.get_baseline_name() == run_name
+    ):
+        return _err("That run is running or queued; stop it first.")
 
     result = case.delete_run(run_name)
     if result.get("status_code") == "success_session":
@@ -298,3 +305,127 @@ def saveParams():
         return _err("Run not found.", http=404)
     case.save_params(data["run_name"], params)
     return jsonify({"message": "Parameters saved.", "status_code": "success"}), 200
+
+
+def _run_log_tail(case, run_name, n=50):
+    """Last ``n`` lines of a run's persisted run_log.txt, or [] if none/unreadable."""
+    path = case.res_path / run_name / "run_log.txt"
+    if not path.exists():
+        return []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return []
+    return lines[-n:]
+
+
+# ── 11. start (or queue) a model run ─────────────────────────────────────────
+@ogcore_run_api.route("/run", methods=["POST"])
+def run():
+    blocked = _blocked_cross_site()
+    if blocked:
+        return blocked
+    data = request.get_json(silent=True)
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    miss = _missing(data, "casename", "run_name", "time_path")
+    if miss:
+        return _err(f"Missing required field: {miss}")
+    casename = data["casename"]
+    run_name = data["run_name"]
+    time_path = data["time_path"]
+    if not isinstance(time_path, bool):
+        return _err("time_path must be a boolean.")
+    bad = _unsafe_name(casename, run_name)
+    if bad:
+        return bad
+
+    case = OGCoreCase(casename)
+    if not case.case_path.is_dir():
+        return _err("Case not found.", http=404)
+    in_index = any(
+        r.get("RunName") == run_name for r in case.gen_data.get("ogc-runs", [])
+    )
+    if not in_index:
+        return _err("Run not found.", http=404)
+
+    result = RunJob.start(casename, run_name, time_path)
+    if result.get("status_code") == "error":
+        return jsonify(result), 400
+    return jsonify(result), 200
+
+
+# ── 12. read a run's live execution status ───────────────────────────────────
+@ogcore_run_api.route("/getRunStatus", methods=["POST"])
+def getRunStatus():
+    data = request.get_json(silent=True)
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    miss = _missing(data, "casename", "run_name")
+    if miss:
+        return _err(f"Missing required field: {miss}")
+    casename = data["casename"]
+    run_name = data["run_name"]
+    bad = _unsafe_name(casename, run_name)
+    if bad:
+        return bad
+
+    case = OGCoreCase(casename)
+    meta = case.get_run_meta(run_name)
+    if not meta:
+        return _err("Run not found.", http=404)
+
+    live = RunJob.get_live(casename, run_name)
+    run_state = meta.get("status")
+    # A run marked running with no live supervisor was orphaned by a restart; repair
+    # its meta to a terminal failed state so it does not appear stuck forever.
+    if run_state == "running" and live is None:
+        case.update_run_status(
+            run_name, "failed", error="Run was interrupted by an application restart."
+        )
+        meta = case.get_run_meta(run_name)
+        run_state = meta.get("status")
+
+    if live:
+        run_stage = live.get("stage_label") or (
+            "Queued" if live.get("queued") else None
+        )
+        run_iteration = live.get("iteration") or None
+        run_log = live.get("log_tail")
+    else:
+        run_stage = None
+        run_iteration = None
+        run_log = _run_log_tail(case, run_name)
+
+    return jsonify({
+        "status_code": "success",
+        "run_state": run_state,
+        "run_stage": run_stage,
+        "run_iteration": run_iteration,
+        "run_log": run_log,
+    }), 200
+
+
+# ── 13. cancel a running or queued run ───────────────────────────────────────
+@ogcore_run_api.route("/cancelRun", methods=["POST"])
+def cancelRun():
+    blocked = _blocked_cross_site()
+    if blocked:
+        return blocked
+    data = request.get_json(silent=True)
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    miss = _missing(data, "casename", "run_name")
+    if miss:
+        return _err(f"Missing required field: {miss}")
+    casename = data["casename"]
+    run_name = data["run_name"]
+    bad = _unsafe_name(casename, run_name)
+    if bad:
+        return bad
+
+    result = RunJob.cancel(casename, run_name)
+    if result.get("status_code") == "cancelled":
+        return jsonify({"status_code": "cancelled"}), 200
+    return jsonify(result), 400

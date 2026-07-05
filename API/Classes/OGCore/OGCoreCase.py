@@ -410,3 +410,32 @@ class OGCoreCase:
         if status in ("completed", "failed"):
             meta["completed_at"] = _utc_now_iso()
         File.writeFile(meta, path)
+
+    def stamp_execution(
+        self,
+        run_name: str,
+        time_path: bool,
+        country: dict,
+        status: str,
+    ) -> None:
+        """
+        Record the execution facts chosen at launch time onto a run's meta.
+
+        Called once when a run is claimed (status "running") or queued (status
+        "pending"): it pins the time_path the user asked for and the country block
+        the worker will layer, and clears any stale error from a prior attempt.
+        """
+        path = self.res_path / run_name / "run_meta.json"
+        meta = File.readFile(path)
+        meta["time_path"] = time_path
+        meta["country"] = country
+        meta["status"] = status
+        meta["error"] = None
+        File.writeFile(meta, path)
+
+    def set_run_provenance(self, run_name: str, provenance: dict) -> None:
+        """Store the worker's provenance snapshot on a completed run's meta."""
+        path = self.res_path / run_name / "run_meta.json"
+        meta = File.readFile(path)
+        meta["provenance"] = provenance
+        File.writeFile(meta, path)
