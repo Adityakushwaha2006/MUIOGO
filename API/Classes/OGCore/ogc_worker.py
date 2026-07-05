@@ -333,7 +333,7 @@ def _solve(p, time_path: bool) -> None:
             pass
 
 
-def _read_and_write_results(run_dir: Path, time_path: bool) -> None:
+def _read_and_write_results(run_dir: Path, time_path: bool, p) -> None:
     from ogcore.utils import safe_read_pickle
 
     ss_pkl = run_dir / "SS" / "SS_vars.pkl"
@@ -369,6 +369,16 @@ def _read_and_write_results(run_dir: Path, time_path: bool) -> None:
                 "The solver pickles are intact.",
                 4,
             )
+
+    meta = {"start_year": int(p.start_year), "T": int(p.T), "S": int(p.S)}
+    try:
+        _atomic_write_json(run_dir / "results_meta.json", meta)
+    except Exception as exc:
+        raise WorkerError(
+            f"Failed to write results_meta.json ({exc}). "
+            "The solver pickles are intact.",
+            4,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +420,7 @@ def _execute_run(run_dir: Path, status: StatusWriter) -> int:
 
     # --- writing_results ---
     status.write("writing_results", "Writing results")
-    _read_and_write_results(run_dir, time_path)
+    _read_and_write_results(run_dir, time_path, p)
 
     # --- terminal ---
     status.write("complete", "Run complete", ok=True)

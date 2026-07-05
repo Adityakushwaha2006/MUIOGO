@@ -13,6 +13,7 @@ from flask import Blueprint, jsonify, request, session
 from Classes.Base import Config
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
 from Classes.OGCore.OGCoreCase import OGCoreCase, is_safe_name
+from Classes.OGCore.OGResults import OGResults
 from Classes.OGCore.RunJob import RunJob
 
 ogcore_run_api = Blueprint("OGCoreRunRoute", __name__, url_prefix="/ogc")
@@ -429,3 +430,151 @@ def cancelRun():
     if result.get("status_code") == "cancelled":
         return jsonify({"status_code": "cancelled"}), 200
     return jsonify(result), 400
+
+
+# ── results: shared validation ───────────────────────────────────────────────
+def _bad_vars(vars_arg):
+    """Error response if an optional ``vars`` field is present but not a list of
+    strings, else None. Absent (None) is always fine."""
+    if vars_arg is None:
+        return None
+    if not isinstance(vars_arg, list) or not all(isinstance(v, str) for v in vars_arg):
+        return _err("vars must be a list of strings.")
+    return None
+
+
+# ── 14. read a run's steady-state variables ──────────────────────────────────
+@ogcore_run_api.route("/getSSVars", methods=["POST"])
+def getSSVars():
+    data = request.get_json(silent=True)
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    miss = _missing(data, "casename", "run_name")
+    if miss:
+        return _err(f"Missing required field: {miss}")
+    casename = data["casename"]
+    run_name = data["run_name"]
+    bad = _unsafe_name(casename, run_name)
+    if bad:
+        return bad
+    vars_arg = data.get("vars")
+    bad_vars = _bad_vars(vars_arg)
+    if bad_vars:
+        return bad_vars
+
+    case = OGCoreCase(casename)
+    meta = case.get_run_meta(run_name)
+    if not meta:
+        return _err("Run not found.", http=404)
+    if meta.get("status") != "completed":
+        return _err("No results - run it first", http=404)
+    ss = OGResults.load_ss(case.res_path / run_name)
+    if ss is None:
+        return _err("No results - run it first", http=404)
+    return jsonify(OGResults.subset(ss, vars_arg)), 200
+
+
+# ── 15. read a run's transition-path variables ───────────────────────────────
+@ogcore_run_api.route("/getTPIVars", methods=["POST"])
+def getTPIVars():
+    data = request.get_json(silent=True)
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    miss = _missing(data, "casename", "run_name")
+    if miss:
+        return _err(f"Missing required field: {miss}")
+    casename = data["casename"]
+    run_name = data["run_name"]
+    bad = _unsafe_name(casename, run_name)
+    if bad:
+        return bad
+    vars_arg = data.get("vars")
+    bad_vars = _bad_vars(vars_arg)
+    if bad_vars:
+        return bad_vars
+
+    case = OGCoreCase(casename)
+    meta = case.get_run_meta(run_name)
+    if not meta:
+        return _err("Run not found.", http=404)
+    if meta.get("status") != "completed":
+        return _err("No results - run it first", http=404)
+    tpi = OGResults.load_tpi(case.res_path / run_name)
+    if tpi is None:
+        return _err("No transition path results for this run.", http=404)
+    return jsonify(OGResults.subset(tpi, vars_arg)), 200
+
+
+def _results_gate(case, casename, run_name):
+    """None if the run has usable results, else the response to return now.
+
+    A run in progress or queued returns the running envelope; a failed run or one
+    with no results returns the error envelope; a missing meta is a 404. Both
+    envelopes carry the casename so the dashboard can key its state to the case.
+    """
+    meta = case.get_run_meta(run_name)
+    if not meta:
+        return _err("Run not found.", http=404)
+    status = meta.get("status")
+    # "In progress" means the run is actually active or queued right now. A run
+    # that is merely pending (created but never started) has no results to wait
+    # for, so it gets the run-it-first envelope, not a spinner.
+    if RunJob.is_busy(casename, run_name):
+        return jsonify({
+            "status_code": "running",
+            "casename": casename,
+            "message": "Solve in progress",
+        }), 200
+    if status != "completed":
+        return jsonify({
+            "status_code": "error",
+            "casename": casename,
+            "message": "No results - run it first",
+        }), 404
+    return None
+
+
+# ── 16. read the consolidated results object ──────────────────────────────────
+@ogcore_run_api.route("/getResults", methods=["POST"])
+def getResults():
+    data = request.get_json(silent=True)
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    miss = _missing(data, "casename", "base_run")
+    if miss:
+        return _err(f"Missing required field: {miss}")
+    casename = data["casename"]
+    base_run = data["base_run"]
+    reform_run = data.get("reform_run")
+    names = [casename, base_run]
+    if reform_run is not None:
+        names.append(reform_run)
+    bad = _unsafe_name(*names)
+    if bad:
+        return bad
+
+    case = OGCoreCase(casename)
+    if not case.case_path.is_dir():
+        return _err("Case not found.", http=404)
+
+    gate = _results_gate(case, casename, base_run)
+    if gate:
+        return gate
+    if reform_run is not None:
+        gate = _results_gate(case, casename, reform_run)
+        if gate:
+            return gate
+
+    base_dir = case.res_path / base_run
+    reform_dir = case.res_path / reform_run if reform_run is not None else None
+    payload, err = OGResults.consolidated(
+        casename, base_run, reform_run, base_dir, reform_dir
+    )
+    if err is not None:
+        message, http = err
+        return jsonify({
+            "status_code": "error",
+            "casename": casename,
+            "message": message,
+        }), http
+    return jsonify(payload), 200
