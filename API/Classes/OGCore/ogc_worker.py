@@ -15,8 +15,12 @@ from it (run_meta.json, ogcParams.json, optional ogcTaxParams.pkl) and every
 output is written back into it (run_status.json for progress, results_ss.json
 and optionally results_tpi.json for results). All writes are atomic.
 
-Only the "run" subcommand exists today. The CLI uses subparsers so future modes
-(tables, validate, taxcheck) can be added without restructuring.
+The "run" subcommand solves a model run and owns run_status.json. Three further
+subcommands are ephemeral read helpers: "tables" builds one analysis table,
+"validate" runs ogcore's parameter checks, and "taxcheck" inspects an uploaded
+tax-parameter pickle. The ephemeral modes never touch run_status.json; each takes
+--out and writes its result JSON there atomically. Exit codes are shared across
+all modes: 0 ok, 2 input rejection, 3 computation failure, 4 IO.
 """
 
 from __future__ import annotations
@@ -460,6 +464,314 @@ def run_command(run_dir: Path) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Ephemeral modes: shared helpers
+# ---------------------------------------------------------------------------
+# tables / validate / taxcheck each compute a small result and write it to
+# --out. They never write run_status.json. Failures map to the same exit codes
+# as run mode via WorkerError.
+
+
+def _write_out(out_path: Path, obj) -> None:
+    """Write the mode result to --out atomically; any IO failure is exit 4."""
+    try:
+        _atomic_write_json(out_path, obj)
+    except Exception as exc:
+        raise WorkerError(f"Failed to write output file {out_path}: {exc}", 4)
+
+
+def _stringify(value) -> str:
+    """Keep ogcore's own text verbatim: pass a string through, JSON-dump anything
+    non-empty else, and collapse empty/falsey to an empty string."""
+    if not value:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, default=str)
+    except Exception:
+        return str(value)
+
+
+def _load_pickle(path: Path, kind: str):
+    """Read one result pickle via ogcore's safe_read_pickle.
+
+    A missing file is an input rejection (2): the run did not produce it. An
+    unreadable file is a computation/data failure (3).
+    """
+    from ogcore.utils import safe_read_pickle
+
+    if not path.is_file():
+        raise WorkerError(f"{kind} not found at {path}.", 2)
+    try:
+        return safe_read_pickle(str(path))
+    except Exception as exc:
+        raise WorkerError(f"{kind} could not be read: {exc}", 3)
+
+
+def _dir_ss(dir_path: Path, kind: str):
+    return _load_pickle(Path(dir_path) / "SS" / "SS_vars.pkl", f"{kind} steady-state results")
+
+
+def _dir_tpi(dir_path: Path, kind: str):
+    return _load_pickle(
+        Path(dir_path) / "TPI" / "TPI_vars.pkl", f"{kind} transition-path results"
+    )
+
+
+def _dir_params(dir_path: Path, kind: str):
+    return _load_pickle(Path(dir_path) / "model_params.pkl", f"{kind} model parameters")
+
+
+# ---------------------------------------------------------------------------
+# tables mode
+# ---------------------------------------------------------------------------
+# Per table: whether a reform run is required, and the whitelist of passthrough
+# option keys accepted in --args-json. Whitelists mirror the real installed
+# output_tables.py signatures.
+_TABLE_SPECS = {
+    "macro": {
+        "reform_required": False,
+        "allowed": ("var_list", "output_type", "num_years", "start_year", "include_SS"),
+    },
+    "macro_ss": {"reform_required": True, "allowed": ("var_list",)},
+    "ineq": {"reform_required": False, "allowed": ("var_list",)},
+    "gini": {"reform_required": False, "allowed": ("var_list",)},
+    "wealth_moments": {"reform_required": False, "allowed": ("data_moments",)},
+    "time_series": {"reform_required": False, "allowed": ("stationarized",)},
+    "revenue_decomp": {
+        "reform_required": True,
+        "allowed": ("num_years", "start_year", "include_business_tax", "full_break_out"),
+    },
+}
+
+
+def _parse_args_json(args_json, allowed) -> dict:
+    """Parse the optional --args-json object and reject any non-whitelisted key."""
+    if not args_json:
+        return {}
+    try:
+        opts = json.loads(args_json)
+    except Exception as exc:
+        raise WorkerError(f"--args-json is not valid JSON: {exc}", 2)
+    if not isinstance(opts, dict):
+        raise WorkerError("--args-json must be a JSON object.", 2)
+    for key in opts:
+        if key not in allowed:
+            raise WorkerError(f"Unknown option for this table: {key}", 2)
+    return opts
+
+
+def _df_to_rows(df):
+    """Convert a returned table DataFrame to a JSON-safe list of row dicts.
+
+    A plain RangeIndex carries no labels and is dropped; a labelled index (e.g.
+    macro_table_SS keys the variable name in the index) is kept as a column so
+    the variable name survives. sanitize() makes every value strict-JSON-safe.
+    """
+    import pandas as pd
+
+    if isinstance(df.index, pd.RangeIndex):
+        records = df.reset_index(drop=True).to_dict(orient="records")
+    else:
+        records = df.reset_index(drop=False).to_dict(orient="records")
+    return sanitize(records)
+
+
+def tables_command(args) -> int:
+    spec = _TABLE_SPECS.get(args.table)
+    if spec is None:
+        raise WorkerError(f"Unknown table: {args.table}", 2)
+
+    base_dir = Path(args.base_dir)
+    if not base_dir.is_dir():
+        raise WorkerError(f"Base run directory not found: {base_dir}", 2)
+    reform_dir = Path(args.reform_dir) if args.reform_dir else None
+    if spec["reform_required"] and reform_dir is None:
+        raise WorkerError(f"The {args.table} table requires a reform run.", 2)
+    if reform_dir is not None and not reform_dir.is_dir():
+        raise WorkerError(f"Reform run directory not found: {reform_dir}", 2)
+
+    opts = _parse_args_json(args.args_json, spec["allowed"])
+
+    from ogcore import output_tables as ot
+
+    try:
+        table = args.table
+        if table == "macro":
+            kwargs = dict(opts)
+            if reform_dir is not None:
+                kwargs["reform_tpi"] = _dir_tpi(reform_dir, "Reform")
+                kwargs["reform_params"] = _dir_params(reform_dir, "Reform")
+            df = ot.macro_table(
+                _dir_tpi(base_dir, "Baseline"),
+                _dir_params(base_dir, "Baseline"),
+                **kwargs,
+            )
+        elif table == "macro_ss":
+            df = ot.macro_table_SS(
+                _dir_ss(base_dir, "Baseline"),
+                _dir_ss(reform_dir, "Reform"),
+                **opts,
+            )
+        elif table == "ineq":
+            kwargs = dict(opts)
+            if reform_dir is not None:
+                kwargs["reform_ss"] = _dir_ss(reform_dir, "Reform")
+                kwargs["reform_params"] = _dir_params(reform_dir, "Reform")
+            df = ot.ineq_table(
+                _dir_ss(base_dir, "Baseline"),
+                _dir_params(base_dir, "Baseline"),
+                **kwargs,
+            )
+        elif table == "gini":
+            kwargs = dict(opts)
+            if reform_dir is not None:
+                kwargs["reform_ss"] = _dir_ss(reform_dir, "Reform")
+                kwargs["reform_params"] = _dir_params(reform_dir, "Reform")
+            df = ot.gini_table(
+                _dir_ss(base_dir, "Baseline"),
+                _dir_params(base_dir, "Baseline"),
+                **kwargs,
+            )
+        elif table == "wealth_moments":
+            df = ot.wealth_moments_table(
+                _dir_ss(base_dir, "Baseline"),
+                _dir_params(base_dir, "Baseline"),
+                **opts,
+            )
+        elif table == "time_series":
+            kwargs = dict(opts)
+            if reform_dir is not None:
+                kwargs["reform_params"] = _dir_params(reform_dir, "Reform")
+                kwargs["reform_tpi"] = _dir_tpi(reform_dir, "Reform")
+            df = ot.time_series_table(
+                _dir_params(base_dir, "Baseline"),
+                _dir_tpi(base_dir, "Baseline"),
+                **kwargs,
+            )
+        elif table == "revenue_decomp":
+            df = ot.dynamic_revenue_decomposition(
+                _dir_params(base_dir, "Baseline"),
+                _dir_tpi(base_dir, "Baseline"),
+                _dir_ss(base_dir, "Baseline"),
+                _dir_params(reform_dir, "Reform"),
+                _dir_tpi(reform_dir, "Reform"),
+                _dir_ss(reform_dir, "Reform"),
+                **opts,
+            )
+        else:  # unreachable: guarded by _TABLE_SPECS above
+            raise WorkerError(f"Unknown table: {table}", 2)
+    except WorkerError:
+        raise
+    except Exception as exc:
+        # A bare assert inside ogcore has an empty str(); name the failure.
+        raise WorkerError(str(exc) or repr(exc), 3)
+
+    rows = _df_to_rows(df)
+    _write_out(Path(args.out), {"rows": rows})
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# validate mode
+# ---------------------------------------------------------------------------
+
+
+def validate_command(args) -> int:
+    run_dir = Path(args.run_dir)
+    if not run_dir.is_dir():
+        raise WorkerError(f"Run directory not found: {run_dir}", 2)
+
+    # Same layering as run mode's preparation: the override dict plus any
+    # uploaded tax-parameter pickle merged on top.
+    override = dict(_read_json_object(run_dir / "ogcParams.json", "ogcParams.json"))
+    tax_path = run_dir / "ogcTaxParams.pkl"
+    if tax_path.exists():
+        try:
+            import cloudpickle
+
+            with open(tax_path, "rb") as f:
+                tax_dict = cloudpickle.load(f)
+        except Exception as exc:
+            raise WorkerError(f"ogcTaxParams.pkl could not be read: {exc}", 4)
+        if not isinstance(tax_dict, dict):
+            raise WorkerError("ogcTaxParams.pkl must contain a dict.", 4)
+        override.update(tax_dict)
+
+    from ogcore.parameters import revision_warnings_errors
+
+    try:
+        result = revision_warnings_errors(override)
+    except Exception as exc:
+        raise WorkerError(str(exc), 3)
+
+    payload = {
+        "valid": not result.get("errors"),
+        "warnings": _stringify(result.get("warnings")),
+        "errors": _stringify(result.get("errors")),
+    }
+    _write_out(Path(args.out), payload)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# taxcheck mode
+# ---------------------------------------------------------------------------
+
+
+def taxcheck_command(args) -> int:
+    # The CHECK itself succeeds even when the file is bad: an unreadable or
+    # malformed file is reported as valid False with a message and exit 0. Only
+    # an IO failure writing --out is a nonzero (4) exit.
+    file_path = Path(args.file)
+    required = ("tax_func_type", "etr_params", "mtrx_params", "mtry_params")
+
+    valid = False
+    tax_func_type = None
+    message = ""
+
+    try:
+        import cloudpickle
+
+        with open(file_path, "rb") as f:
+            obj = cloudpickle.load(f)
+    except Exception as exc:
+        obj = None
+        message = f"File could not be read: {exc}"
+
+    if message == "":
+        if not isinstance(obj, dict):
+            message = "File does not contain a dict."
+        else:
+            missing = [k for k in required if k not in obj]
+            if missing:
+                message = "Missing required keys: " + ", ".join(missing)
+            else:
+                valid = True
+                tax_func_type = obj.get("tax_func_type")
+
+    _write_out(
+        Path(args.out),
+        {"valid": valid, "tax_func_type": tax_func_type, "message": message},
+    )
+    return 0
+
+
+def _run_ephemeral(handler, args) -> int:
+    """Run one ephemeral mode, mapping WorkerError to its exit code and printing
+    the message to stderr; any other failure is a computation failure (3)."""
+    try:
+        return handler(args)
+    except WorkerError as exc:
+        # A bare assert has an empty str(); repr keeps the failure nameable.
+        print(str(exc) or repr(exc), file=sys.stderr)
+        return exc.exit_code
+    except Exception as exc:
+        print(str(exc) or repr(exc), file=sys.stderr)
+        return 3
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -477,6 +789,32 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Absolute path to the run directory holding this run's files.",
     )
+
+    tables_parser = subparsers.add_parser("tables", help="Build one analysis table.")
+    tables_parser.add_argument("--base-dir", required=True, help="Baseline run directory.")
+    tables_parser.add_argument(
+        "--reform-dir", default=None, help="Reform run directory (when applicable)."
+    )
+    tables_parser.add_argument(
+        "--table", required=True, choices=sorted(_TABLE_SPECS.keys())
+    )
+    tables_parser.add_argument(
+        "--args-json", default=None, help="JSON object of passthrough table options."
+    )
+    tables_parser.add_argument("--out", required=True, help="Output JSON path.")
+
+    validate_parser = subparsers.add_parser(
+        "validate", help="Run ogcore's parameter warnings/errors check."
+    )
+    validate_parser.add_argument("--run-dir", required=True, help="Run directory.")
+    validate_parser.add_argument("--out", required=True, help="Output JSON path.")
+
+    taxcheck_parser = subparsers.add_parser(
+        "taxcheck", help="Inspect an uploaded tax-parameter pickle."
+    )
+    taxcheck_parser.add_argument("--file", required=True, help="Pickle file to inspect.")
+    taxcheck_parser.add_argument("--out", required=True, help="Output JSON path.")
+
     return parser
 
 
@@ -487,8 +825,14 @@ def main(argv=None) -> int:
     if args.command == "run":
         run_dir = Path(args.run_dir).resolve()
         return run_command(run_dir)
+    if args.command == "tables":
+        return _run_ephemeral(tables_command, args)
+    if args.command == "validate":
+        return _run_ephemeral(validate_command, args)
+    if args.command == "taxcheck":
+        return _run_ephemeral(taxcheck_command, args)
 
-    # Unreachable while "run" is the only registered subcommand.
+    # Unreachable: subparsers is required and every command is dispatched above.
     parser.error(f"Unknown command: {args.command}")
     return 2
 

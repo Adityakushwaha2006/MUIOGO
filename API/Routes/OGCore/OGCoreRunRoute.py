@@ -5,12 +5,25 @@ layout; nothing here executes OG-Core or imports the ogcore package. Model runs
 happen in a separate OG environment driven by the worker layer. See:
     Track1-API-Schema-Discussion/OGCore-API-Schema-FINAL.md
 """
+import csv
+import os
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-from flask import Blueprint, jsonify, request, session
+from flask import (
+    Blueprint,
+    after_this_request,
+    jsonify,
+    request,
+    send_file,
+    session,
+)
 
 from Classes.Base import Config
+from Classes.Base.FileClass import File
+from Classes.OGCore import OGTables
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
 from Classes.OGCore.OGCoreCase import OGCoreCase, is_safe_name
 from Classes.OGCore.OGResults import OGResults
@@ -61,6 +74,11 @@ def _unsafe_name(*names):
         if not is_safe_name(name):
             return _err("Invalid name.")
     return None
+
+
+def _utc_now_z():
+    """ISO-8601 UTC timestamp with a trailing Z, seconds precision."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ── 1. read active-case session ──────────────────────────────────────────────
@@ -578,3 +596,337 @@ def getResults():
             "message": message,
         }), http
     return jsonify(payload), 200
+
+
+# ── analysis tables: shared endpoint ─────────────────────────────────────────
+def _table_endpoint(table_key):
+    """Serve one OG-Core analysis table built by the worker.
+
+    Validates the request against the table's TABLES spec, gates on the run(s)
+    having usable results, then spawns the worker's tables mode and returns the
+    list of row objects it produced. A worker failure surfaces as a 502.
+    """
+    worker_key, reform_required, allowed = OGTables.TABLES[table_key]
+
+    data = request.get_json(silent=True)
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    miss = _missing(data, "casename", "base_run")
+    if miss:
+        return _err(f"Missing required field: {miss}")
+    casename = data["casename"]
+    base_run = data["base_run"]
+    reform_run = data.get("reform_run")
+    if reform_required and not reform_run:
+        return _err("This table requires a reform run.")
+
+    names = [casename, base_run]
+    if reform_run is not None:
+        names.append(reform_run)
+    bad = _unsafe_name(*names)
+    if bad:
+        return bad
+
+    # Only whitelisted, present, non-null option fields pass through.
+    options = {}
+    for key in allowed:
+        if key in data and data[key] is not None:
+            options[key] = data[key]
+
+    # OG-Core's macro table defaults to percent-change output, which asserts on
+    # reform data. A baseline-only request is only meaningful as levels, so that
+    # becomes the default when no reform is selected (the caller can still say
+    # otherwise explicitly and get OG-Core's own refusal).
+    if table_key == "macro" and reform_run is None and "output_type" not in options:
+        options["output_type"] = "levels"
+
+    case = OGCoreCase(casename)
+    if not case.case_path.is_dir():
+        return _err("Case not found.", http=404)
+
+    gate = _results_gate(case, casename, base_run)
+    if gate:
+        return gate
+    if reform_run is not None:
+        gate = _results_gate(case, casename, reform_run)
+        if gate:
+            return gate
+
+    python_path, err = OGTables.resolve_python(case)
+    if err:
+        return _err(err)
+
+    base_dir = case.res_path / base_run
+    reform_dir = case.res_path / reform_run if reform_run is not None else None
+    argv = OGTables.table_args(table_key, base_dir, reform_dir, options)
+    payload, werr = OGTables.run_worker_mode(python_path, argv)
+    if werr is not None:
+        return jsonify({"message": werr, "status_code": "error"}), 502
+
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if rows is None:
+        return jsonify(
+            {"message": "The table result was malformed.", "status_code": "error"}
+        ), 502
+    return jsonify(rows), 200
+
+
+@ogcore_run_api.route("/getMacroTable", methods=["POST"])
+def getMacroTable():
+    return _table_endpoint("macro")
+
+
+@ogcore_run_api.route("/getMacroTableSS", methods=["POST"])
+def getMacroTableSS():
+    return _table_endpoint("macro_ss")
+
+
+@ogcore_run_api.route("/getIneqTable", methods=["POST"])
+def getIneqTable():
+    return _table_endpoint("ineq")
+
+
+@ogcore_run_api.route("/getGiniTable", methods=["POST"])
+def getGiniTable():
+    return _table_endpoint("gini")
+
+
+@ogcore_run_api.route("/getWealthMomentsTable", methods=["POST"])
+def getWealthMomentsTable():
+    return _table_endpoint("wealth_moments")
+
+
+@ogcore_run_api.route("/getTimeSeriesTable", methods=["POST"])
+def getTimeSeriesTable():
+    return _table_endpoint("time_series")
+
+
+@ogcore_run_api.route("/getRevenueDecomposition", methods=["POST"])
+def getRevenueDecomposition():
+    return _table_endpoint("revenue_decomp")
+
+
+# ── validate a run's parameters against OG-Core's own rules ───────────────────
+@ogcore_run_api.route("/validateParams", methods=["POST"])
+def validateParams():
+    blocked = _blocked_cross_site()
+    if blocked:
+        return blocked
+    data = request.get_json(silent=True)
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    miss = _missing(data, "casename", "run_name")
+    if miss:
+        return _err(f"Missing required field: {miss}")
+    casename = data["casename"]
+    run_name = data["run_name"]
+    bad = _unsafe_name(casename, run_name)
+    if bad:
+        return bad
+
+    case = OGCoreCase(casename)
+    run_dir = case.res_path / run_name
+    if not run_dir.is_dir():
+        return _err("Run not found.", http=404)
+
+    python_path, err = OGTables.resolve_python(case)
+    if err:
+        return _err(err)
+
+    payload, werr = OGTables.run_worker_mode(
+        python_path, ["validate", "--run-dir", str(run_dir)]
+    )
+    if werr is not None:
+        return jsonify({"message": werr, "status_code": "error"}), 502
+    return jsonify(payload), 200
+
+
+# ── upload a run's tax-function parameter pickle ─────────────────────────────
+@ogcore_run_api.route("/uploadTaxParams", methods=["POST"])
+def uploadTaxParams():
+    blocked = _blocked_cross_site()
+    if blocked:
+        return blocked
+
+    casename = request.form.get("casename")
+    run_name = request.form.get("run_name")
+    if not casename or not run_name:
+        return _err("Missing required field: casename and run_name are required.")
+    bad = _unsafe_name(casename, run_name)
+    if bad:
+        return bad
+
+    case = OGCoreCase(casename)
+    run_dir = case.res_path / run_name
+    if not run_dir.is_dir():
+        return _err("Run not found.", http=404)
+
+    upload = request.files.get("file")
+    if upload is None or not upload.filename:
+        return _err("No file uploaded.")
+    if not upload.filename.lower().endswith(".pkl"):
+        return _err("The tax parameter file must be a .pkl file.")
+
+    max_bytes = 16 * 1024 * 1024
+    if request.content_length is not None and request.content_length > max_bytes:
+        return _err("The uploaded file is too large (max 16MB).", http=413)
+
+    python_path, err = OGTables.resolve_python(case)
+    if err:
+        return _err(err)
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".pkl")
+    os.close(fd)
+    try:
+        upload.save(tmp_path)
+        payload, werr = OGTables.run_worker_mode(
+            python_path, ["taxcheck", "--file", tmp_path]
+        )
+        if werr is not None:
+            return jsonify({"message": werr, "status_code": "error"}), 502
+        if not payload.get("valid"):
+            return jsonify({
+                "message": payload.get("message") or "Invalid tax parameter file.",
+                "status_code": "error",
+            }), 400
+
+        tax_func_type = payload.get("tax_func_type")
+        try:
+            os.replace(tmp_path, run_dir / "ogcTaxParams.pkl")
+        except OSError:
+            # The temp dir can sit on a different drive than DataStorage, where
+            # os.replace cannot atomically move; fall back to a copying move.
+            import shutil
+
+            shutil.move(tmp_path, run_dir / "ogcTaxParams.pkl")
+        tmp_path = None  # moved into place; do not delete in finally
+        File.writeFile(
+            {"tax_func_type": tax_func_type, "uploaded_at": _utc_now_z()},
+            run_dir / "ogcTaxParams.info.json",
+        )
+        return jsonify({
+            "message": "Tax params loaded.",
+            "tax_func_type": tax_func_type,
+            "status_code": "success",
+        }), 200
+    finally:
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+# ── read the stored tax-params info sidecar ──────────────────────────────────
+@ogcore_run_api.route("/getTaxParamsInfo", methods=["GET"])
+def getTaxParamsInfo():
+    casename = request.args.get("casename")
+    run_name = request.args.get("run_name")
+    if not casename or not run_name:
+        return _err("Missing required field: casename and run_name are required.")
+    bad = _unsafe_name(casename, run_name)
+    if bad:
+        return bad
+
+    case = OGCoreCase(casename)
+    info_path = case.res_path / run_name / "ogcTaxParams.info.json"
+    if not info_path.exists():
+        return jsonify({"loaded": False}), 200
+    try:
+        info = File.readFile(info_path)
+    except (OSError, ValueError, IndexError):
+        return jsonify({"loaded": False}), 200
+    return jsonify({
+        "loaded": True,
+        "tax_func_type": info.get("tax_func_type"),
+        "uploaded_at": info.get("uploaded_at"),
+    }), 200
+
+
+# ── download the macro comparison table as a CSV file ────────────────────────
+@ogcore_run_api.route("/downloadResults", methods=["GET"])
+def downloadResults():
+    casename = request.args.get("casename")
+    base_run = request.args.get("base_run")
+    reform_run = request.args.get("reform_run")
+    if not casename or not base_run:
+        return _err("Missing required field: casename and base_run are required.")
+
+    names = [casename, base_run]
+    if reform_run is not None:
+        names.append(reform_run)
+    bad = _unsafe_name(*names)
+    if bad:
+        return bad
+
+    case = OGCoreCase(casename)
+    if not case.case_path.is_dir():
+        return _err("Case not found.", http=404)
+
+    gate = _results_gate(case, casename, base_run)
+    if gate:
+        return gate
+    if reform_run is not None:
+        gate = _results_gate(case, casename, reform_run)
+        if gate:
+            return gate
+
+    python_path, err = OGTables.resolve_python(case)
+    if err:
+        return _err(err)
+
+    base_dir = case.res_path / base_run
+    reform_dir = case.res_path / reform_run if reform_run is not None else None
+    # Baseline-only downloads must be levels; percent change needs a reform.
+    options = {} if reform_run is not None else {"output_type": "levels"}
+    argv = OGTables.table_args("macro", base_dir, reform_dir, options)
+    payload, werr = OGTables.run_worker_mode(python_path, argv)
+    if werr is not None:
+        return jsonify({"message": werr, "status_code": "error"}), 502
+
+    rows = payload.get("rows") if isinstance(payload, dict) else None
+    if not rows:
+        return jsonify(
+            {"message": "No results to download.", "status_code": "error"}
+        ), 502
+
+    # Header is the union of row keys in first-appearance order (first row first).
+    header = []
+    seen = set()
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                seen.add(key)
+                header.append(key)
+
+    fd, csv_path = tempfile.mkstemp(suffix=".csv")
+    os.close(fd)
+    try:
+        with open(csv_path, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=header, extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+    except OSError:
+        try:
+            os.unlink(csv_path)
+        except OSError:
+            pass
+        return jsonify(
+            {"message": "Failed to build the download.", "status_code": "error"}
+        ), 500
+
+    @after_this_request
+    def _cleanup(response):
+        try:
+            os.unlink(csv_path)
+        except OSError:
+            pass
+        return response
+
+    return send_file(
+        csv_path,
+        as_attachment=True,
+        download_name=f"{casename}_{base_run}_results.csv",
+        mimetype="text/csv",
+    )
