@@ -91,6 +91,9 @@ OGC_INSTALLED_REGISTRY = OGC_DATA_STORAGE / "og_calibrations_installed.json"
 OGC_INSTALL_JOBS_DIR = OGC_DATA_STORAGE / "install_jobs"
 OGC_CATALOG_CACHE = OGC_DATA_STORAGE / "catalog_cache.json"
 OGC_INSTALLER_CACHE_DIR = OGC_DATA_STORAGE / "installer"
+# Cases live in their own subfolder so they never collide with the registry,
+# install-job, and installer-cache entries that #486 stores in OGC_DATA_STORAGE.
+OGC_CASES_DIR = OGC_DATA_STORAGE / "cases"
 
 # Calibration environments install OUTSIDE the repo. Default ~/.muiogo/og-models,
 # overridable so a user can point installs elsewhere. A country lands at
