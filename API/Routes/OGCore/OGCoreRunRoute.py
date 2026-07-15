@@ -2,8 +2,7 @@
 
 All routes live under /ogc. They wrap OGCoreCase, which owns the on-disk case/run
 layout; nothing here executes OG-Core or imports the ogcore package. Model runs
-happen in a separate OG environment driven by the worker layer. See:
-    Track1-API-Schema-Discussion/OGCore-API-Schema-FINAL.md
+happen in a separate OG environment driven by the worker layer.
 """
 import csv
 import json
