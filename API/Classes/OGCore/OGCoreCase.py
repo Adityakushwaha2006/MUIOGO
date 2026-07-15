@@ -1,28 +1,6 @@
-"""
-OG-Core case and run management (disk-backed CRUD).
-
-This class owns the on-disk case/run layout for OG-Core. It never executes the
-model and never imports the ogcore package: execution runs in a separate OG
-environment driven by the worker layer, so this file stays a pure filesystem
-CRUD surface that any MUIOGO request thread can touch safely.
-
-On-disk layout owned by this class::
-
-    OGC_CASES_DIR/<casename>/
-        genData.json              case metadata + run index (includes country_id)
-        res/<runname>/
-            ogcParams.json        the override dict (only what the user changed)
-            run_meta.json         run type, baseline path, time_path, status, timestamps
-
-SS/, TPI/, run_status.json, and results_*.json are created at run time by the
-worker layer, not here; this class only lays down the case, the run directory,
-and the two seed JSON files above.
-
-Parameters live per run, not per case. In OG-Core a baseline and a reform are the
-same model with different policy parameters (the reform is the policy change), so
-each run keeps its own override dict. A case is just an organisational container
-for related runs.
-"""
+"""On-disk CRUD for OG-Core cases and runs. Does not run the model or import
+ogcore; runs happen in a separate environment via the worker. Parameters live
+per run: a baseline and a reform are the same model with different params."""
 
 from __future__ import annotations
 
@@ -36,10 +14,8 @@ from Classes.Base.FileClass import File
 
 logger = logging.getLogger(__name__)
 
-# Names that are fine as OG-Core labels but illegal or dangerous as directory
-# names. A case/run name becomes a directory, so it has to be a safe single path
-# component. Otherwise mkdir throws an opaque OSError, or on Windows quietly
-# creates a reserved device path.
+# A case/run name becomes a directory, so it has to be a safe path component.
+# Otherwise mkdir throws an opaque error, or on Windows makes a reserved device path.
 _RESERVED_NAMES = (
     {"CON", "PRN", "AUX", "NUL"}
     | {f"COM{i}" for i in range(1, 10)}
@@ -50,71 +26,48 @@ _MAX_NAME_LEN = 200
 
 
 def is_safe_name(name) -> bool:
-    """True if ``name`` is safe to use as a single filesystem directory name."""
     if not isinstance(name, str) or not name or name in (".", ".."):
         return False
     if len(name) > _MAX_NAME_LEN:
         return False
     if any(ch in _UNSAFE_CHARS for ch in name):
         return False
-    if name != name.rstrip(". "):  # Windows silently strips trailing dot/space
+    if name != name.rstrip(". "):  # Windows strips trailing dot/space
         return False
-    if name.split(".")[0].upper() in _RESERVED_NAMES:  # reserved device names
+    if name.split(".")[0].upper() in _RESERVED_NAMES:
         return False
     return True
 
 
 def _utc_now_iso() -> str:
-    """Timezone-aware UTC timestamp in ISO-8601 form."""
     return datetime.now(timezone.utc).isoformat()
 
 
 class OGCoreCase:
-    """Manages one OG-Core case directory and the runs inside it."""
-
     def __init__(self, casename: str):
         self.casename = casename
-        # Cases live under their own subfolder, never inside OGC_DATA_STORAGE
-        # alongside the registry / install-job / installer-cache entries.
+        # Cases go in their own subfolder, not next to the registry/install entries.
         self.case_path = Path(Config.OGC_CASES_DIR, casename)
         self.gen_data_path = self.case_path / "genData.json"
         self.res_path = self.case_path / "res"
-        self._gen_data: dict | None = None  # lazy cache
-
-    # ── Per-run path helpers ───────────────────────────────────────────────
+        self._gen_data: dict | None = None
 
     def run_params_path(self, run_name: str) -> Path:
         return self.res_path / run_name / "ogcParams.json"
 
-    # ── genData cache ──────────────────────────────────────────────────────
-
     @property
     def gen_data(self) -> dict:
-        """Case metadata, read once and cached. Invalidated on every write."""
         if self._gen_data is None:
             self._gen_data = File.readFile(self.gen_data_path)
         return self._gen_data
 
     def _write_gen_data(self, data: dict) -> None:
         File.writeFile(data, self.gen_data_path)
-        self._gen_data = None  # invalidate cache so next read is fresh
-
-    # ── Case CRUD ──────────────────────────────────────────────────────────
+        self._gen_data = None  # invalidate cache
 
     def create_case(self, gen_data: dict) -> dict:
-        """
-        Create a brand-new case directory and seed its files.
-
-        Caller (route) guarantees the case does not already exist; the case dir
-        itself is created with ``exist_ok`` False so a logic error surfaces loudly
-        rather than silently overwriting an existing case. The parent cases folder
-        is created first (exist_ok True) so the very first case does not fail on a
-        missing OGC_CASES_DIR.
-
-        ``gen_data`` arrives from the route already carrying country_id,
-        ogc-casename, and ogc-description; this method only stamps the run index
-        and schema version.
-        """
+        # exist_ok False on the case dir so a logic error fails loudly instead of
+        # overwriting an existing case.
         if not is_safe_name(self.casename):
             return {"message": "Invalid case name.", "status_code": "error"}
         Config.OGC_CASES_DIR.mkdir(parents=True, exist_ok=True)
@@ -127,10 +80,7 @@ class OGCoreCase:
         return {"message": f"Case {self.casename} created.", "status_code": "created"}
 
     def save_case(self, gen_data: dict) -> dict:
-        """
-        Update an existing case's metadata. The run index and version are carried
-        over from the existing file so that editing case details never wipes runs.
-        """
+        # Carry the run index and version forward so editing details never wipes runs.
         existing = self.gen_data
         gen_data["ogc-runs"] = existing.get("ogc-runs", [])
         gen_data["ogc-version"] = existing.get("ogc-version", "1.0")
@@ -139,19 +89,13 @@ class OGCoreCase:
         return {"message": f"Case {self.casename} updated.", "status_code": "edited"}
 
     def delete_case(self) -> dict:
-        """Remove the entire case directory and all runs within it."""
         shutil.rmtree(self.case_path)
         logger.info("Deleted OG-Core case '%s'", self.casename)
         return {"message": f"Case {self.casename} deleted.", "status_code": "success_session"}
 
     @classmethod
     def list_cases(cls) -> list[dict]:
-        """
-        A summary row for every case on disk.
-
-        A single unreadable or malformed case directory must never break the whole
-        listing, so any per-directory failure is logged and that directory skipped.
-        """
+        # One bad case dir shouldn't break the whole listing, so log and skip it.
         cases: list[dict] = []
         cases_dir = Config.OGC_CASES_DIR
         if not cases_dir.is_dir():
@@ -180,7 +124,6 @@ class OGCoreCase:
 
     @staticmethod
     def _case_has_results(case_dir: Path) -> bool:
-        """True if any run in the case has a completed run_meta. Defensive throughout."""
         res_dir = case_dir / "res"
         if not res_dir.is_dir():
             return False
@@ -200,22 +143,16 @@ class OGCoreCase:
                 return True
         return False
 
-    # ── Parameters (per run) ───────────────────────────────────────────────
-
     def get_params(self, run_name: str) -> dict:
-        """Return a run's override dict, or {} if none saved yet."""
         path = self.run_params_path(run_name)
         return File.readFile(path) if path.exists() else {}
 
     def save_params(self, run_name: str, params: dict) -> dict:
-        """Persist a run's override dict verbatim."""
         run_dir = self.res_path / run_name
         if not run_dir.is_dir():
             return {"message": "Run not found.", "status_code": "error"}
         File.writeFile(params, self.run_params_path(run_name))
         return {"message": "Parameters saved.", "status_code": "success"}
-
-    # ── Run management ─────────────────────────────────────────────────────
 
     def create_run(
         self,
@@ -224,19 +161,8 @@ class OGCoreCase:
         baseline_run_name: str | None,
         params: dict | None = None,
     ) -> dict:
-        """
-        Create a run directory and register it in the case run index.
-
-        ``params`` is the run's initial override dict and gets written to the run's
-        own ogcParams.json, so a run can be created with its full policy in one
-        call, or created empty and filled in later via save_params. Only the run
-        directory and its two seed JSON files are created here; SS/, TPI/, and
-        results are laid down at execution time by the worker layer.
-
-        A case holds exactly one baseline. A reform must name an existing baseline
-        run; completion is not checked here, since the run-time guard enforces that
-        a reform only executes once its baseline has finished.
-        """
+        # A reform must name an existing baseline; completion is checked later at
+        # run time, not here.
         if not is_safe_name(run_name):
             return {"message": "Invalid run name.", "status_code": "error"}
         if not self.gen_data_path.exists():
@@ -250,8 +176,7 @@ class OGCoreCase:
             return {"message": "Run with same name already exists.", "status_code": "exist"}
 
         if run_type == "baseline":
-            # One baseline per case: reforms read the baseline's outputs, so there
-            # is exactly one baseline to reform against.
+            # One baseline per case; reforms read its outputs.
             if self.get_baseline_name() is not None:
                 return {"message": "This case already has a baseline run.",
                         "status_code": "exist"}
@@ -275,14 +200,13 @@ class OGCoreCase:
 
         run_path.mkdir(parents=True, exist_ok=True)
 
-        # Seed the run's own parameter file (empty dict if none supplied).
         File.writeFile(params or {}, self.run_params_path(run_name))
 
         run_meta = {
             "run_name": run_name,
             "run_type": run_type,
             "baseline_output_path": baseline_output_path,
-            "time_path": None,  # set at execution time
+            "time_path": None,
             "status": "pending",
             "error": None,
             "created_at": _utc_now_iso(),
@@ -304,7 +228,6 @@ class OGCoreCase:
         return {"message": "Run created.", "status_code": "success"}
 
     def get_baseline_name(self) -> str | None:
-        """RunName of the case's baseline index entry, or None if there is none."""
         if not self.gen_data_path.exists():
             return None
         for run in self.gen_data.get("ogc-runs", []):
@@ -313,12 +236,7 @@ class OGCoreCase:
         return None
 
     def delete_run(self, run_name: str) -> dict:
-        """
-        Remove a run directory and drop it from the case run index.
-
-        Deleting the baseline invalidates every reform that depends on its outputs,
-        so removing the baseline removes the entire case.
-        """
+        # Deleting the baseline removes the whole case, since every reform depends on it.
         if not self.gen_data_path.exists():
             return {"message": "Case not found.", "status_code": "error"}
         if self.get_baseline_name() == run_name:
@@ -339,22 +257,13 @@ class OGCoreCase:
         return {"message": "Run deleted.", "status_code": "success"}
 
     def get_runs(self) -> list:
-        """
-        The run index, with each run's live status pulled from its run_meta.json.
-        A run that is listed in the index but missing its meta file is reported as
-        pending; that is a defensive case and should not happen normally.
-
-        Each entry is a copy, so the transient status fields are never written back
-        into the cached gen_data. That stops a later create_run/delete_run on the
-        same instance from leaking run_meta state into genData.json.
-
-        A missing case returns an empty list rather than raising.
-        """
+        # Run index with each run's live status from its run_meta. Entries are
+        # copies so the status fields don't leak back into cached genData.
         if not self.gen_data_path.exists():
             return []
         enriched = []
         for run in self.gen_data.get("ogc-runs", []):
-            item = dict(run)  # copy: do not mutate cached gen_data
+            item = dict(run)  # copy so we don't mutate cached gen_data
             meta_path = self.res_path / item["RunName"] / "run_meta.json"
             if meta_path.exists():
                 meta = File.readFile(meta_path)
@@ -371,10 +280,7 @@ class OGCoreCase:
         return enriched
 
     def get_runs_shaped(self) -> dict:
-        """
-        The run index in contract shape: a single baseline (or None) plus the list
-        of reforms, each enriched with live status exactly as get_runs does.
-        """
+        # Same as get_runs, split into the single baseline plus the list of reforms.
         baseline = None
         reforms = []
         for item in self.get_runs():
@@ -385,7 +291,6 @@ class OGCoreCase:
         return {"baseline": baseline, "reforms": reforms}
 
     def get_run_meta(self, run_name: str) -> dict:
-        """Raw run_meta.json for a run, or {} if it does not exist."""
         path = self.res_path / run_name / "run_meta.json"
         return File.readFile(path) if path.exists() else {}
 
@@ -396,11 +301,7 @@ class OGCoreCase:
         error: str | None = None,
         time_path: bool | None = None,
     ) -> None:
-        """
-        Update a run's status (and optionally time_path / error) in place.
-        Stamps completed_at when the run reaches a terminal state. Statuses used
-        are pending / running / completed / failed.
-        """
+        # Stamps completed_at when the run reaches a terminal state.
         path = self.res_path / run_name / "run_meta.json"
         meta = File.readFile(path)
         meta["status"] = status
@@ -418,13 +319,7 @@ class OGCoreCase:
         country: dict,
         status: str,
     ) -> None:
-        """
-        Record the execution facts chosen at launch time onto a run's meta.
-
-        Called once when a run is claimed (status "running") or queued (status
-        "pending"): it pins the time_path the user asked for and the country block
-        the worker will layer, and clears any stale error from a prior attempt.
-        """
+        # Pin the time_path and country onto the meta at launch, clearing any old error.
         path = self.res_path / run_name / "run_meta.json"
         meta = File.readFile(path)
         meta["time_path"] = time_path
@@ -434,7 +329,6 @@ class OGCoreCase:
         File.writeFile(meta, path)
 
     def set_run_provenance(self, run_name: str, provenance: dict) -> None:
-        """Store the worker's provenance snapshot on a completed run's meta."""
         path = self.res_path / run_name / "run_meta.json"
         meta = File.readFile(path)
         meta["provenance"] = provenance
