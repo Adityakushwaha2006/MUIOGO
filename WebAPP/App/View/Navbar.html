@@ -1,14 +1,27 @@
+<!-- MUIOGO extension START -->
 <div  class="navbar-brand ">
-	<i class="fa fa-cubes fa-lg"></i><span style="font-weight: bold;">  MUIO <sub>ver.5.6</sub></span><br>
-	<!-- <i class="fa fa-cubes bigger-150 "></i><span style="font-weight: bold;">   PROTOTYPE <sub>ver.2.0</sub></span><br> -->
-	<!-- <span style="font-size:10px; margin-top:0px" class="hidden-xs "><i>Electricity Simulation Environment ver.2.0</i></span> -->
+	<svg class="osy-logo" width="30" height="30" viewBox="0 0 100 100" fill="none" aria-label="MUIOGO">
+		<path d="M16 26 C36 26 42 50 54 50" stroke="#94CF72" stroke-width="9" stroke-linecap="round"/>
+		<path d="M16 74 C36 74 42 50 54 50" stroke="#F79D51" stroke-width="9" stroke-linecap="round"/>
+		<path d="M54 50 L84 50" stroke="#19BFFF" stroke-width="10" stroke-linecap="round"/>
+		<circle cx="54" cy="50" r="13" fill="#3a3f51" stroke="#19BFFF" stroke-width="4.5"/>
+		<circle cx="54" cy="50" r="5.5" fill="#19BFFF"/>
+	</svg>
+	<span class="osy-wm">MUIO<span class="osy-go">GO</span> <sub>ver.5.6</sub></span>
 </div>
+<div class="osy-modelctx">
+	<span class="osy-mlabel">Model:</span>
+	<button class="osy-modelbtn osy-selectmodel" id="osy-mb-og" data-model="og" title="OG-Core, overlapping generations macroeconomic model">OG-Core</button>
+	<button class="osy-modelbtn osy-selectmodel" id="osy-mb-clews" data-model="clews" title="CLEWS, the existing MUIO interface">CLEWS</button>
+</div>
+<!-- MUIOGO extension END -->
 <!-- #PROJECTS: projects dropdown -->
 <div class="project-context hidden-xs">
-	<span class="label">Models:</span>
+	<!-- MUIOGO extension: label scoped to CLEWS, the model selector above owns model choice -->
+	<span class="label">CLEWS model:</span>
 	<span class="project-selector dropdown-toggle" data-toggle="dropdown">Select model <i class="fa fa-angle-down"></i></span>
 	<ul class="dropdown-menu" id="casePicker"></ul>
-	 
+
 </div>
 <div class="pull-left" id="osy-runtitle" style="padding-top:20px!important; display: none;">
 	<span id="osy-caserun"></span> /
@@ -42,10 +55,9 @@
 		<span> <a href="javascript:void(0);" data-action="launchFullscreen" title="Full Screen"><i class="fa fa-arrows-alt" style="margin:0px!important"></i></a> </span>
 	</div>
 	<div class="btn-header transparent pull-right">
-		<span> 
-			<a id='osy-sounds' title='Trun sounds off/on'><i class="fa fa-volume-up" style="margin:0px!important"></i></a> 
+		<span>
+			<a id='osy-sounds' title='Turn sounds off/on'><i class="fa fa-volume-up" style="margin:0px!important"></i></a>
 		</span>
 	</div>
 </div>
-
 
