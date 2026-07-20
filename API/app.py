@@ -36,6 +36,7 @@ from Routes.Case.SyncS3Route import syncs3_api
 from Routes.Case.ViewDataRoute import viewdata_api
 from Routes.DataFile.DataFileRoute import datafile_api
 from Routes.OGCore.OGCoreInstallRoute import ogcore_install_api
+from Classes.OGCore.InstallJob import InstallJob
 
 def _configure_logging():
     if getattr(_configure_logging, "_configured", False):
@@ -177,6 +178,12 @@ if __name__ == '__main__':
     import mimetypes
     mimetypes.add_type('application/javascript', '.js')
     port = int(os.environ.get("PORT", 5002))
+
+    # Fail any OG install left mid-flight by a previous restart, so it does not read as
+    # installing forever. Runs when the server actually starts, not on mere import. Note:
+    # this is tied to launching via `python app.py`; a WSGI loader that imports app:app
+    # would need to call this itself.
+    InstallJob.reconcile_interrupted_jobs()
 
     def print_startup_info(host, current_port, server_name):
         mode = 'local' if Config.HEROKU_DEPLOY == 0 else 'heroku'

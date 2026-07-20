@@ -2,8 +2,7 @@
 
 All routes live under /ogc. The frontend never runs uv or shell directly; it calls
 these endpoints and the backend either wraps the OG-Core universal installer
-(catalog / repo URL) or validates and records a local copy. See:
-    Track1-API-Schema-Discussion/OGCore-API-Schema-FINAL.md
+(catalog / repo URL) or validates and records a local copy.
 """
 import os
 import re
@@ -380,6 +379,12 @@ def refreshCalibration():
     if record is None:
         return _err("That calibration is not registered.", http=404)
 
+    # A record exists from the moment an install starts (install_state "installing"),
+    # so a refresh must not run over a job in flight and overwrite its state. Let the
+    # running job finish first.
+    if InstallJob.is_country_active(country_id):
+        return _err("An install or update is already running for this country.")
+
     check_only = data.get("check_only", True)
     local_path = record.get("local_path")
 
@@ -438,4 +443,27 @@ def refreshCalibration():
         "install_id": job["install_id"],
         "install_state": job["install_state"],
         "message": "Calibration update started.",
+    }), 200
+
+
+# ── 9. cancel a running install ───────────────────────────────────────────────
+@ogcore_install_api.route("/cancelInstall", methods=["POST"])
+def cancelInstall():
+    blocked = _blocked_cross_site()
+    if blocked:
+        return blocked
+    data = _body()
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    install_id = data.get("install_id")
+    if not install_id:
+        return _err("Missing required field: install_id")
+    if not isinstance(install_id, str) or not _INSTALL_ID_RE.match(install_id):
+        return _err("Invalid install_id.")
+    if not InstallJob.cancel(install_id):
+        return _err("No running install with that id to cancel.", http=404)
+    return jsonify({
+        "status_code": "success",
+        "install_id": install_id,
+        "message": "Cancellation requested.",
     }), 200
