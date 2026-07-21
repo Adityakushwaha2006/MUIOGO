@@ -51,7 +51,6 @@ export class Model {
                 // if(columnfield = '2020')
                 // console.log('ROW, COLUMN, VALUE ', row, columnfield, value)
                 if(row == 4 && columnfield == '2020')
-                console.log('row renderer ', row,  'row renderer value ',  value)
                 if (value === null || value === '') {
                     return '<span style="margin: 4px; float:right; ">n/a</span>';
                 } else {

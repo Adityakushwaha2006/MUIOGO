@@ -58,7 +58,6 @@ export default class AddCase {
                 AddCase.initPage(model);
             })
             .catch(error => {
-                console.log(' error ', error)
                 Message.bigBoxDanger(error);
             })
     }
@@ -67,7 +66,6 @@ export default class AddCase {
         Message.clearMessages();
         //$('a[href="#tabComms"]').click();
         //Navbar.initPage(model.casename, model.pageId);
-        console.log('model ', model)
         
         Html.title(model.casename, model.title, "create & edit");
         Html.genData(model);
@@ -334,7 +332,6 @@ export default class AddCase {
                 //sortingn ne utice na rowid i id i index
                 var rowid = $divTech.jqxGrid('getrowid', id);
 
-                console.log('rowid id ', rowid,id)
                 //var rows = $divTech.jqxGrid('getboundrows');
                 // // console.log('rows[rowId].uid ', rows[rowid].uid);
                 // // console.log('rows[id]].uid ', rows[id].uid);
@@ -348,7 +345,6 @@ export default class AddCase {
                 //provjera da brisemo tacnu tehnologiju
                 //console.log('techIds ', model.techs[id].TechId,techId, htmltechId,    model.techNames[techId],   model.techNames[model.techs[id].TechId],    model.techNames[htmltechId])
                 if(model.techs[id].TechId != techId ||techId != htmltechId){
-                    console.log('delete tech')  
                     Message.bigBoxDanger('Technology deletion error', `Wrong index!! <b>${model.techs[id].Tech}</b>?`, 3000);
                 }
                 if(model.techs[id].TG.length>0){          
@@ -604,7 +600,6 @@ export default class AddCase {
             model.seasons[rowBoundIndex][column] = value;
             if (column == 'Se') {
                 var seId = $divSe.jqxGrid('getcellvalue', rowBoundIndex, 'SeId');
-                console.log('seId ', seId, value)
                 model.seNames[seId] = value;
             }
         });
@@ -761,7 +756,6 @@ export default class AddCase {
                 delete model.dtbNames[dtbId];
                 //ovdje trebamo izbaciti season iz timeslice definicije
                 $.each(model.timeslices, function (id, obj) {
-                    console.log('dtbCount ', id, obj, dtbId)
                     if(obj.DTB == dtbId){
                         obj.DTB='DTB_0';
                     }
@@ -918,7 +912,6 @@ export default class AddCase {
             let defaultStg = DefaultObj.defaultStg();
             model.stg.push(JSON.parse(JSON.stringify(defaultStg[0], ['StgId', 'Stg', 'Desc',"UnitId", "TTS","TFS", "Operation"])));
             //update stgames
-            console.log('defaultStg ',defaultStg)
             model.stgNames[defaultStg[0]['StgId']] = defaultStg[0]['Stg'];
             //add row
             $divStg.jqxGrid('addrow', null, defaultStg);
@@ -952,7 +945,6 @@ export default class AddCase {
             model.stg[rowBoundIndex][column] = value;
             if (column == 'Stg') {
                 var stgId = $divStg.jqxGrid('getcellvalue', rowBoundIndex, 'StgId');
-                console.log('stgId ', stgId, value)
                 model.stgNames[stgId] = value;
             }
         });
@@ -1087,7 +1079,6 @@ export default class AddCase {
             event.stopImmediatePropagation();
             let defaultIndicator = DefaultObj.defaultIndicator();
             model.indicators.push(JSON.parse(JSON.stringify(defaultIndicator[0], ['IndicatorId', 'Indicator', 'Desc', 'IndicatorTypeId', 'Techs', 'Comms'])));
-            console.log('model.defaultIndicator ',defaultIndicator)
 
             $divIndicator.jqxGrid('addrow', null, defaultIndicator);
             $divIndicator.jqxGrid('updatebounddata', 'data');
@@ -1122,8 +1113,6 @@ export default class AddCase {
             }else{
                 var value = args.newvalue;
             }
-            console.log('column ', column)
-            console.log('value ', value)
             if (column != 'Techs' && column != 'Comms' && column != 'IndicatorTypeId') {
                 model.indicators[rowBoundIndex][column] = value;
             } else if (column == 'Techs' || column == 'Comms') {
@@ -1137,7 +1126,6 @@ export default class AddCase {
                 }
                 model.indicators[rowBoundIndex][column] = array;
             } else if (column == 'IndicatorTypeId') {
-                console.log('IndicatorTypeId value received:', value);
                 model.indicators[rowBoundIndex][column] = value;
             }
         });
