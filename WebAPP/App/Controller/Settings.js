@@ -136,10 +136,8 @@ export default class Settings {
                 })
                 .then((data) =>{
                     let [session, module] = data; 
-                    console.log(pageId, module, session);
                     const AddCase = module.default;
                     const casename = session['session'];
-                    console.log('units from strogae ',JSON.parse(localStorage.getItem("osy-units")))
                     // Call the onLoad method
                     AddCase.refreshPage(casename);
                 })

@@ -18,7 +18,6 @@ export class Model {
 
             let RTSMgrid = DataModel.RTSMgrid(genData, RTSMdata, PARAMETERS);
 
-            console.log('RTSMgrid ', RTSMgrid)
 
             // let techIds = DataModel.TechId(genData);
             // let ActivityTechs = DataModel.activityTechs(techs);
