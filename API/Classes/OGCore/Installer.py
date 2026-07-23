@@ -41,6 +41,8 @@ try:
     )
 except ValueError:
     _INACTIVITY_TIMEOUT_SECONDS = 600.0
+if _INACTIVITY_TIMEOUT_SECONDS <= 0:
+    _INACTIVITY_TIMEOUT_SECONDS = 600.0
 
 
 class InstallerError(Exception):
@@ -445,6 +447,13 @@ class Installer:
         def _capture(line):
             captured.append(line)
             log(line)
+
+        # A killed install can leave a .git with no working tree; the update path
+        # cannot recover it and cleanup skips pre-existing dirs, so clear it.
+        if pre_existed and not (local_path / "pyproject.toml").exists():
+            log(f"Removing unusable leftover at {local_path}; starting a fresh clone.")
+            rmtree_force(local_path)
+            pre_existed = local_path.exists()  # rmtree is best-effort
 
         rc, reason = cls._stream(cmd, _capture, cancel=cancel)
 
