@@ -115,8 +115,6 @@ export default class RYDtb {
                 delete obj.ScId;
             });
 
-            console.log('param ', param)
-            console.log('savedata ', saveData)
 
             Osemosys.updateData(saveData, param, "RYDtb.json")
                 .then(response => {
