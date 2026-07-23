@@ -41,6 +41,7 @@ class InstallJob:
     _jobs = {}               # install_id -> job dict
     _active_by_country = {}  # country_id -> install_id (only while running)
     _cancel_by_id = {}       # install_id -> threading.Event (only while running)
+    _shutting_down = False   # set by cancel_all so no new install starts during shutdown
 
     # ── id + persistence ─────────────────────────────────────────────────────
     @classmethod
@@ -317,8 +318,11 @@ class InstallJob:
     def _launch(cls, *, country_id, country_name, source_type, work_fn):
         # Check-and-claim the country under one lock so two concurrent requests for
         # the same country cannot both start and clone into the same directory.
-        # Returns None if an install for this country is already running.
+        # Returns None if an install for this country is already running, or if the
+        # server is shutting down (so a late request cannot orphan a fresh process tree).
         with cls._lock:
+            if cls._shutting_down:
+                return None
             if country_id in cls._active_by_country:
                 return None
             install_id = cls._new_install_id()  # RLock is reentrant
@@ -359,6 +363,33 @@ class InstallJob:
             return False
         event.set()
         return True
+
+    @classmethod
+    def active_count(cls):
+        """How many installs are running in this process right now."""
+        with cls._lock:
+            return len(cls._active_by_country)
+
+    @classmethod
+    def cancel_all(cls):
+        """Signal every running install to stop. Returns the install_ids signalled.
+
+        For server shutdown: installs run in their own process group so cancel can
+        tree-kill them, which also means a plain server stop would orphan them. Setting
+        each cancel event lets the running supervisors tear their trees down and finalize
+        as failures, exactly like a user cancel. Idempotent: a second call after the jobs
+        clear sees an empty map and returns nothing.
+
+        Also latches a shutting-down flag (under the same lock as the snapshot) so a
+        request racing in on another thread cannot start a new, unsignalled install after
+        this snapshot and leave its process tree orphaned.
+        """
+        with cls._lock:
+            cls._shutting_down = True
+            events = list(cls._cancel_by_id.items())
+        for _install_id, event in events:
+            event.set()
+        return [install_id for install_id, _ in events]
 
     # ── public entry points ──────────────────────────────────────────────────
     @classmethod
