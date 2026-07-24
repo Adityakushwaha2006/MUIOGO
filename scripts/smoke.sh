@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEFAULT_VENV_PY="${HOME}/.venvs/muiogo/bin/python"
+DEFAULT_VENV_PY="${PROJECT_ROOT}/.venv/bin/python"
 ACTIVE_VENV_PY="${VIRTUAL_ENV:-}/bin/python"
 CONFIGURED_VENV_PY="${MUIOGO_VENV_PYTHON:-}"
 

@@ -1399,13 +1399,13 @@ class DataFile(Osemosys):
 
             # df_merge7 = df_merge7.set_index(['r','y']).fillna(df_YStmp.set_index(['r','y'])).reset_index()
             df_merge7 = pd.merge(df_merge7, df_YStmp, on=['r','y'],  suffixes=("", "_y"), how="left")
-            df_merge7['Sum'].fillna(df_merge7['Sum_y'], inplace=True)
+            df_merge7['Sum'] = df_merge7['Sum'].fillna(df_merge7['Sum_y'])
 
             df_merge7.drop(columns=['Sum_y'],axis=1, inplace=True)
 
             ################################################################################################ df za provjeru 8
-            df_TAALL = df_TAALL.groupby(['r','t'])['TotalTechnologyAnnualActivityLowerLimit'].sum().reset_index().rename(columns={'TotalTechnologyAnnualActivityLowerLimit':'Sum_TotalTechnologyAnnualActivityLowerLimit'})
-            df_merge8 = df_TMPAUL.merge(df_TAALL, on=['r','t'], how='left')
+            df_TAALL_sum = df_TAALL.groupby(['r','t'])['TotalTechnologyAnnualActivityLowerLimit'].sum().reset_index().rename(columns={'TotalTechnologyAnnualActivityLowerLimit':'Sum_TotalTechnologyAnnualActivityLowerLimit'})
+            df_merge8 = df_TMPAUL.merge(df_TAALL_sum, on=['r','t'], how='left')
             df_merge8['TotalTechnologyModelPeriodActivityUpperLimit'] = df_merge8['TotalTechnologyModelPeriodActivityUpperLimit'].fillna(self.defaultValue['TMPAU'])
             df_merge8 = df_merge8[df_merge8['Sum_TotalTechnologyAnnualActivityLowerLimit'].notna()]
 
@@ -1434,8 +1434,8 @@ class DataFile(Osemosys):
             ########################################################################################### C H E C K 2
             print("CHECK 2. Check if YearSplits sums to 1 for y in YEAR")
             msg+="CHECK 2. Check if YearSplits sums to 1 for y in YEAR\n"
-            df_YS = df_YS.groupby(['r','y'])['YearSplit'].sum().reset_index()
-            df_check2 = df_YS[(df_YS["YearSplit"] != 1)]
+            df_YS_sum = df_YS.groupby(['r','y'])['YearSplit'].sum().reset_index()
+            df_check2 = df_YS_sum[(df_YS_sum["YearSplit"] != 1)]
             if not df_check2.empty:
                 print("CHECK 2: Error")
                 print(df_check2)
@@ -1559,8 +1559,8 @@ class DataFile(Osemosys):
             ########################################################################################### C H E C K 9
             print("CHECK 9. Checking if Specified Demand Profile sums to 1 for (f, y)")
             msg+="CHECK 9. Checking if Specified Demand Profile sums to 1 for (f, y)\n"
-            df_SDP = df_SDP.groupby(['r','f','y'])['SpecifiedDemandProfile'].sum().reset_index()
-            df_check9 = df_SDP[(df_SDP["SpecifiedDemandProfile"] > 1.001) | (df_SDP["SpecifiedDemandProfile"] < 0.999)]
+            df_SDP_total = df_SDP.groupby(['r','f','y'])['SpecifiedDemandProfile'].sum().reset_index()
+            df_check9 = df_SDP_total[(df_SDP_total["SpecifiedDemandProfile"] > 1.001) | (df_SDP_total["SpecifiedDemandProfile"] < 0.999)]
 
             if not df_check9.empty:
                 print("CHECK 9: Error")
@@ -2439,7 +2439,7 @@ class DataFile(Osemosys):
                         df_prod = pd.merge(df_out_ys, df_activity, how='left', on=['t','m','l','y'])
                         region = [x for x in list(df_prod.r.unique()) if str(x) != 'nan']
                         df_prod['r'] = str(region[0])
-                        df_prod['RateOfActivity'].fillna(0, inplace=True)
+                        df_prod['RateOfActivity'] = df_prod['RateOfActivity'].fillna(0)
                         df_prod['ProductionByTechnologyByMode'] = df_prod['OutputActivityRatio']*df_prod['YearSplit']*df_prod['RateOfActivity']
                         df_prod = df_prod.drop(['OutputActivityRatio','YearSplit','RateOfActivity'], axis=1)
                         df_prod['ProductionByTechnologyByMode'] = df_prod['ProductionByTechnologyByMode'].astype(float).round(4)
@@ -2509,7 +2509,7 @@ class DataFile(Osemosys):
                         df_ropbt = pd.merge(df_out_ys, df_activity, how='left', on=['t','m','l','y'])
                         region = [x for x in list(df_ropbt.r.unique()) if str(x) != 'nan']
                         df_ropbt['r'] = str(region[0])
-                        df_ropbt['RateOfActivity'].fillna(0, inplace=True)
+                        df_ropbt['RateOfActivity'] = df_ropbt['RateOfActivity'].fillna(0)
 
                         df_ropbt['RateOfProductionByTechnologyByMode'] = df_ropbt['OutputActivityRatio']*df_ropbt['RateOfActivity']
                         df_ropbt = df_ropbt.drop(['OutputActivityRatio','YearSplit','RateOfActivity'], axis=1)
@@ -2524,7 +2524,7 @@ class DataFile(Osemosys):
                         df_use = pd.merge(df_in_ys, df_activity, how='left', on=['t','m','l','y'])
                         region = [x for x in list(df_use.r.unique()) if str(x) != 'nan']
                         df_use['r'] = str(region[0])
-                        df_use['RateOfActivity'].fillna(0, inplace=True)
+                        df_use['RateOfActivity'] = df_use['RateOfActivity'].fillna(0)
             
                         df_use['UseByTechnologyByMode'] = df_use['InputActivityRatio']*df_use['YearSplit']*df_use['RateOfActivity']
                         df_use = df_use.drop(['InputActivityRatio','YearSplit','RateOfActivity'], axis=1)
@@ -2537,7 +2537,7 @@ class DataFile(Osemosys):
                         df_roubt = pd.merge(df_in_ys, df_activity, how='left', on=['t','m','l','y'])
                         region = [x for x in list(df_roubt.r.unique()) if str(x) != 'nan']
                         df_roubt['r'] = str(region[0])
-                        df_roubt['RateOfActivity'].fillna(0, inplace=True)
+                        df_roubt['RateOfActivity'] = df_roubt['RateOfActivity'].fillna(0)
             
                         df_roubt['RateOfUseByTechnologyByMode'] = df_roubt['InputActivityRatio']*df_roubt['RateOfActivity']
                         df_roubt = df_roubt.drop(['InputActivityRatio','YearSplit','RateOfActivity'], axis=1)

@@ -5,7 +5,10 @@ from typing import Any
 
 
 class CustomThread(Thread):
-    def __init__(self, group=None, target=None, name=None, args=(), kwargs={}, Verbose=None):
+    def __init__(self, group=None, target=None, name=None, args=(), kwargs=None, Verbose=None):
+        if kwargs is None:
+            kwargs = {}
+
         Thread.__init__(self, group, target, name, args, kwargs)
         self._return = None
         self._exc_info = None  # captures exception if thread crashes
@@ -17,8 +20,8 @@ class CustomThread(Thread):
             except Exception:
                 self._exc_info = sys.exc_info()
 
-    def join(self):
-        Thread.join(self)
+    def join(self , *args , **kwargs):
+        Thread.join(self , *args , **kwargs)
         if self._exc_info is not None:
             raise self._exc_info[1].with_traceback(self._exc_info[2])
         return self._return

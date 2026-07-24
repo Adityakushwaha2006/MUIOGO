@@ -2,7 +2,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # MUIOGO Launcher (macOS / Linux)
 #
-# Starts the API with the setup venv and opens the browser automatically.
+# Starts the API with the project-local venv and opens the browser automatically.
 # Usage:
 #   ./scripts/start.sh
 # ──────────────────────────────────────────────────────────────────────────────
@@ -17,7 +17,7 @@ if [ -n "${CONDA_DEFAULT_ENV:-}" ]; then
     exit 1
 fi
 
-VENV_DIR="${MUIOGO_VENV_DIR:-$HOME/.venvs/muiogo}"
+VENV_DIR="${MUIOGO_VENV_DIR:-$PROJECT_ROOT/.venv}"
 PYTHON="$VENV_DIR/bin/python"
 HOST="127.0.0.1"
 PORT="${PORT:-5002}"
@@ -26,8 +26,7 @@ TIMEOUT_SECONDS=30
 
 if [ ! -x "$PYTHON" ]; then
     echo "ERROR: Venv Python not found at: $PYTHON"
-    echo "Run setup first:"
-    echo "  ./scripts/setup.sh"
+    echo "From the MUIOGO project directory, run 'uv sync'."
     exit 1
 fi
 

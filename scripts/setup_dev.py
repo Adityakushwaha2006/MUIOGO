@@ -20,7 +20,7 @@ Supports: macOS, Linux (apt/dnf/pacman), Windows
 
 Python support: >=3.10 and <3.13 (recommended: 3.11)
 
-Default venv location: ~/.venvs/muiogo (outside repo)
+Default venv location: <project root>/.venv (matches the uv installer and start scripts)
 """
 
 import argparse
@@ -44,7 +44,7 @@ import tempfile
 # ──────────────────────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-VENV_DIR = (Path.home() / ".venvs" / "muiogo").resolve()
+VENV_DIR = (PROJECT_ROOT / ".venv").resolve()
 REQUIREMENTS = PROJECT_ROOT / "requirements.txt"
 ENV_FILE = PROJECT_ROOT / ".env"
 # Where a prebuilt CBC (cbcbox) is copied so it survives 'uv sync', which prunes
@@ -354,7 +354,8 @@ def _resolve_venv_dir(venv_dir_arg: str | None) -> Path:
     if env_override:
         return Path(env_override).expanduser().resolve()
 
-    return (Path.home() / ".venvs" / "muiogo").resolve()
+    # Project-local .venv, matching the uv installer and the start/smoke scripts.
+    return (PROJECT_ROOT / ".venv").resolve()
 
 
 def _sha256(path: Path) -> str:
@@ -1423,7 +1424,7 @@ def main() -> int:
         "--venv-dir",
         help=(
             "Virtual environment directory path. "
-            "Default: ~/.venvs/muiogo (or MUIOGO_VENV_DIR if set)."
+            "Default: <project root>/.venv (or MUIOGO_VENV_DIR if set)."
         ),
     )
     parser.add_argument(
@@ -1508,12 +1509,6 @@ def main() -> int:
     print(f"  Support  : >={MIN_PYTHON[0]}.{MIN_PYTHON[1]}, <{MAX_PYTHON[0]}.{MAX_PYTHON[1]}")
     print(f"  Project  : {PROJECT_ROOT}")
     print(f"  Venv dir : {VENV_DIR}")
-
-    if not args.platform_only and PROJECT_ROOT.resolve() in VENV_DIR.resolve().parents:
-        _print_warn(
-            "Using in-repo virtual environment",
-            "This can cause high CPU in Codex Desktop. External venv is recommended.",
-        )
 
     if args.check:
         demo_ok = True

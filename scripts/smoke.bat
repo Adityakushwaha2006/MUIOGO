@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 set "SCRIPT_DIR=%~dp0"
 set "PROJECT_ROOT=%SCRIPT_DIR%.."
-set "DEFAULT_VENV_PY=%USERPROFILE%\.venvs\muiogo\Scripts\python.exe"
+set "DEFAULT_VENV_PY=%PROJECT_ROOT%\.venv\Scripts\python.exe"
 set "ACTIVE_VENV_PY=%VIRTUAL_ENV%\Scripts\python.exe"
 
 if not "%CONDA_DEFAULT_ENV%"=="" (

@@ -60,8 +60,7 @@ export default class RESViewer {
                 settings.Desc = $("#useDesc").is(":checked");
 
                 let DemandComms = DataModel.getDemandComms(RYCdata, genData['osy-years']);
-                let model = new Model(casename, genData, DemandComms, settings);
-                modelNew.cmbTechs = model.cmbTechs;
+                let modelNew = new Model(casename, genData, DemandComms, settings);
                 this.initPage(modelNew);
                 this.initEvents(modelNew);
             })
