@@ -670,6 +670,8 @@ def _table_endpoint(table_key):
         return jsonify(
             {"message": "The table result was malformed.", "status_code": "error"}
         ), 502
+    if reform_run is None:
+        rows = OGTables.relabel_single_run(rows, base_run)
     return jsonify(rows), 200
 
 
@@ -891,6 +893,9 @@ def downloadResults():
         return jsonify(
             {"message": "No results to download.", "status_code": "error"}
         ), 502
+
+    if reform_run is None:
+        rows = OGTables.relabel_single_run(rows, base_run)
 
     # Header is the union of row keys in first-appearance order (first row first).
     header = []

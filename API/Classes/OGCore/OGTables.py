@@ -64,6 +64,39 @@ def resolve_python(case):
     return python_path, None
 
 
+def _relabel_key(key, run_name):
+    """Rename a column key that carries the slot name: "Baseline", "<var>: Baseline"."""
+    if key == "Baseline":
+        return run_name
+    if isinstance(key, str) and key.endswith(": Baseline"):
+        return f"{key[: -len(': Baseline')]}: {run_name}"
+    return key
+
+
+def relabel_single_run(rows, run_name):
+    """Label a one-run table with that run's name instead of "Baseline".
+
+    OG-Core names a table's two slots by position and takes no label argument, so
+    whichever run goes in the base slot comes back called "Baseline". That is wrong
+    when the one run being viewed is a reform. Depending on the table the slot name
+    arrives as a suffix of the "Variable" value, as a whole column key, or as a
+    suffix of one, so all three are rewritten. A table carrying no slot name is
+    returned unchanged.
+    """
+    suffix = " Baseline"
+    relabelled = []
+    for row in rows:
+        if not isinstance(row, dict):
+            relabelled.append(row)
+            continue
+        row = {_relabel_key(key, run_name): value for key, value in row.items()}
+        variable = row.get("Variable")
+        if isinstance(variable, str) and variable.endswith(suffix):
+            row["Variable"] = f"{variable[: -len(suffix)]} ({run_name})"
+        relabelled.append(row)
+    return relabelled
+
+
 def table_args(table_key, base_dir, reform_dir, options):
     """Build the worker argv (excluding --out) for a tables call."""
     worker_key = TABLES[table_key][0]

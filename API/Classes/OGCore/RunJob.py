@@ -266,16 +266,28 @@ class RunJob:
         while cls._queue:
             casename, run_name, time_path = cls._queue.popleft()
             case = OGCoreCase(casename)
-            country, python_path, err = cls._resolve_country_env(case)
-            if err:
-                try:
-                    case.update_run_status(run_name, "failed", error=err)
-                except (OSError, ValueError, KeyError):
-                    pass
+            try:
+                country, python_path, err = cls._resolve_country_env(case)
+                if err:
+                    cls._fail_quietly(case, run_name, err)
+                    continue
+                # Stamping rewrites run_meta.json and can fail on its own, so it is
+                # inside the guard too: otherwise one unreadable run breaks out of
+                # the drain and strands everything queued behind it.
+                case.stamp_execution(run_name, time_path, country, "running")
+            except (OSError, ValueError, KeyError, IndexError):
+                cls._fail_quietly(case, run_name, "The run could not be started.")
                 continue
-            case.stamp_execution(run_name, time_path, country, "running")
             cls._launch(casename, run_name, time_path, python_path)
             return
+
+    @staticmethod
+    def _fail_quietly(case, run_name, message) -> None:
+        """Mark a run failed, tolerating a meta file that cannot be written."""
+        try:
+            case.update_run_status(run_name, "failed", error=message)
+        except (OSError, ValueError, KeyError, IndexError):
+            pass
 
     # ── cancel ─────────────────────────────────────────────────────────────
     @classmethod
@@ -293,7 +305,18 @@ class RunJob:
 
             for item in list(cls._queue):
                 if item[0] == casename and item[1] == run_name:
-                    cls._queue.remove(item)  # already "pending"; nothing else to do
+                    cls._queue.remove(item)
+                    # Dropping it from the queue is not enough. Nothing revisits a
+                    # pending run later (only a running one is repaired on status
+                    # read), so it has to be written terminal here or it reads as
+                    # pending forever.
+                    try:
+                        OGCoreCase(casename).update_run_status(
+                            run_name, "failed", error="Cancelled by user."
+                        )
+                    except (OSError, ValueError, KeyError, IndexError):
+                        # File.writeFile turns any write error into IndexError.
+                        pass
                     return {"status_code": "cancelled"}
 
             return {
