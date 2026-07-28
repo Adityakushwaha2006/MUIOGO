@@ -1,11 +1,15 @@
 from flask import Blueprint, jsonify, request
 from Classes.Case.OsemosysClass import Osemosys
+from utils import validate_json_fields
 
 viewdata_api = Blueprint('ViewDataRoute', __name__)
 
 @viewdata_api.route("/viewData", methods=['POST'])
 def viewData():
     try:
+        err, code = validate_json_fields('casename')
+        if err:
+            return err, code
         casename = request.json['casename']
         if casename != None:
             osy = Osemosys(casename)
@@ -23,6 +27,9 @@ def viewData():
 @viewdata_api.route("/viewTEData", methods=['POST'])
 def viewTEData():
     try:
+        err, code = validate_json_fields('casename')
+        if err:
+            return err, code
         casename = request.json['casename']
         if casename != None:
             osy = Osemosys(casename)
@@ -39,7 +46,9 @@ def viewTEData():
 @viewdata_api.route("/updateViewData", methods=['POST'])
 def updateViewData():
     try:
-        #casename, updateType, groupId, paramId, TechId, CommId, EmisId, Timeslice
+        err, code = validate_json_fields('casename', 'year', 'ScId', 'groupId', 'paramId', 'TechId', 'CommId', 'EmisId', 'Timeslice', 'value')
+        if err:
+            return err, code
         casename = request.json['casename']
         #updateType = request.json['updateType']
         year = request.json['year']
@@ -72,7 +81,9 @@ def updateViewData():
 @viewdata_api.route("/updateTEViewData", methods=['POST'])
 def updateTEViewData():
     try:
-        #casename, updateType, groupId, paramId, TechId, CommId, EmisId, Timeslice
+        err, code = validate_json_fields('casename', 'scId', 'groupId', 'paramId', 'techId', 'emisId', 'value')
+        if err:
+            return err, code
         casename = request.json['casename']
         scId = request.json['scId']
         groupId = request.json['groupId']
