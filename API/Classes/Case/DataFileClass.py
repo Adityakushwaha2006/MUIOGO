@@ -825,10 +825,10 @@ class DataFile(Osemosys):
             cases = self.resData['osy-cases']
 
             for cs in cases:
-                for sc in cs['Scenarios']:
-                    if sc['ScenarioId'] == scenarioId:
-                        cs['Scenarios'].remove(sc)
-
+                cs['Scenarios'] = [
+                    sc for sc in cs['Scenarios']
+                    if sc['ScenarioId'] != scenarioId
+                ]
 
             File.writeFile(self.resData, self.resDataPath)
             response = {
@@ -836,9 +836,7 @@ class DataFile(Osemosys):
                 "status_code": "success"
             } 
 
-
             return response
-            # urllib.request.urlretrieve(self.dataFile, dataFile)
         except(IOError, IndexError):
             raise IndexError
         except OSError:
@@ -921,14 +919,11 @@ class DataFile(Osemosys):
         
     def deleteCaseRun(self, caserunname, resultsOnly):
         try:
-            #caseRunPath = Path(Config.DATA_STORAGE,self.case,'res', caserunname)
-            #self.resData = Path(Config.DATA_STORAGE,self.case,'view', 'resData.json')
-
-
             if not resultsOnly:
-                for obj in self.resData['osy-cases']:
-                    if obj['Case'] == caserunname:
-                        self.resData['osy-cases'].remove(obj)
+                self.resData['osy-cases'] = [
+                    obj for obj in self.resData['osy-cases']
+                    if obj['Case'] != caserunname
+                ]
 
                 File.writeFile(self.resData, self.resDataPath)
 
