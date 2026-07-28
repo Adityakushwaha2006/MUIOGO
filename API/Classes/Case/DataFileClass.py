@@ -747,7 +747,8 @@ class DataFile(Osemosys):
             path = '"{}"'.format(self.resPath)
 
             dataFilePath = Path(Config.DATA_STORAGE, self.case, 'res',caserunname,'data.txt')
-
+            # restored backups may lack an empty res/<caserunname>/ folder
+            dataFilePath.parent.mkdir(parents=True, exist_ok=True)
 
             # self.f = open(self.dataFile, mode="w", encoding='utf-8')
             #self.f = open(dataFilePath, mode="w", encoding='utf-8')
@@ -848,10 +849,10 @@ class DataFile(Osemosys):
             cases = self.resData['osy-cases']
 
             for cs in cases:
-                for sc in cs['Scenarios']:
-                    if sc['ScenarioId'] == scenarioId:
-                        cs['Scenarios'].remove(sc)
-
+                cs['Scenarios'] = [
+                    sc for sc in cs['Scenarios']
+                    if sc['ScenarioId'] != scenarioId
+                ]
 
             File.writeFile(self.resData, self.resDataPath)
             response = {
@@ -859,9 +860,7 @@ class DataFile(Osemosys):
                 "status_code": "success"
             } 
 
-
             return response
-            # urllib.request.urlretrieve(self.dataFile, dataFile)
         except(IOError, IndexError):
             raise IndexError
         except OSError:
@@ -944,14 +943,11 @@ class DataFile(Osemosys):
         
     def deleteCaseRun(self, caserunname, resultsOnly):
         try:
-            #caseRunPath = Path(Config.DATA_STORAGE,self.case,'res', caserunname)
-            #self.resData = Path(Config.DATA_STORAGE,self.case,'view', 'resData.json')
-
-
             if not resultsOnly:
-                for obj in self.resData['osy-cases']:
-                    if obj['Case'] == caserunname:
-                        self.resData['osy-cases'].remove(obj)
+                self.resData['osy-cases'] = [
+                    obj for obj in self.resData['osy-cases']
+                    if obj['Case'] != caserunname
+                ]
 
                 File.writeFile(self.resData, self.resDataPath)
 
@@ -1422,7 +1418,7 @@ class DataFile(Osemosys):
 
             # df_merge7 = df_merge7.set_index(['r','y']).fillna(df_YStmp.set_index(['r','y'])).reset_index()
             df_merge7 = pd.merge(df_merge7, df_YStmp, on=['r','y'],  suffixes=("", "_y"), how="left")
-            df_merge7['Sum'].fillna(df_merge7['Sum_y'], inplace=True)
+            df_merge7['Sum'] = df_merge7['Sum'].fillna(df_merge7['Sum_y'])
 
             df_merge7.drop(columns=['Sum_y'],axis=1, inplace=True)
 
@@ -2462,7 +2458,7 @@ class DataFile(Osemosys):
                         df_prod = pd.merge(df_out_ys, df_activity, how='left', on=['t','m','l','y'])
                         region = [x for x in list(df_prod.r.unique()) if str(x) != 'nan']
                         df_prod['r'] = str(region[0])
-                        df_prod['RateOfActivity'].fillna(0, inplace=True)
+                        df_prod['RateOfActivity'] = df_prod['RateOfActivity'].fillna(0)
                         df_prod['ProductionByTechnologyByMode'] = df_prod['OutputActivityRatio']*df_prod['YearSplit']*df_prod['RateOfActivity']
                         df_prod = df_prod.drop(['OutputActivityRatio','YearSplit','RateOfActivity'], axis=1)
                         df_prod['ProductionByTechnologyByMode'] = df_prod['ProductionByTechnologyByMode'].astype(float).round(4)
@@ -2532,7 +2528,7 @@ class DataFile(Osemosys):
                         df_ropbt = pd.merge(df_out_ys, df_activity, how='left', on=['t','m','l','y'])
                         region = [x for x in list(df_ropbt.r.unique()) if str(x) != 'nan']
                         df_ropbt['r'] = str(region[0])
-                        df_ropbt['RateOfActivity'].fillna(0, inplace=True)
+                        df_ropbt['RateOfActivity'] = df_ropbt['RateOfActivity'].fillna(0)
 
                         df_ropbt['RateOfProductionByTechnologyByMode'] = df_ropbt['OutputActivityRatio']*df_ropbt['RateOfActivity']
                         df_ropbt = df_ropbt.drop(['OutputActivityRatio','YearSplit','RateOfActivity'], axis=1)
@@ -2547,7 +2543,7 @@ class DataFile(Osemosys):
                         df_use = pd.merge(df_in_ys, df_activity, how='left', on=['t','m','l','y'])
                         region = [x for x in list(df_use.r.unique()) if str(x) != 'nan']
                         df_use['r'] = str(region[0])
-                        df_use['RateOfActivity'].fillna(0, inplace=True)
+                        df_use['RateOfActivity'] = df_use['RateOfActivity'].fillna(0)
             
                         df_use['UseByTechnologyByMode'] = df_use['InputActivityRatio']*df_use['YearSplit']*df_use['RateOfActivity']
                         df_use = df_use.drop(['InputActivityRatio','YearSplit','RateOfActivity'], axis=1)
@@ -2560,7 +2556,7 @@ class DataFile(Osemosys):
                         df_roubt = pd.merge(df_in_ys, df_activity, how='left', on=['t','m','l','y'])
                         region = [x for x in list(df_roubt.r.unique()) if str(x) != 'nan']
                         df_roubt['r'] = str(region[0])
-                        df_roubt['RateOfActivity'].fillna(0, inplace=True)
+                        df_roubt['RateOfActivity'] = df_roubt['RateOfActivity'].fillna(0)
             
                         df_roubt['RateOfUseByTechnologyByMode'] = df_roubt['InputActivityRatio']*df_roubt['RateOfActivity']
                         df_roubt = df_roubt.drop(['InputActivityRatio','YearSplit','RateOfActivity'], axis=1)

@@ -1,11 +1,10 @@
 import shutil
-from flask import Blueprint, request, jsonify, send_file, after_this_request
+from flask import Blueprint, request, jsonify, send_file
 from zipfile import ZipFile, ZIP_DEFLATED
 from pathlib import Path, PurePosixPath
 from werkzeug.utils import secure_filename
-import os, time, json, glob
+import os, json, glob
 
-from threading import Thread
 
 from Classes.Case.HelpersClass import Helpers
 from Classes.Base import Config
@@ -254,20 +253,6 @@ def updateTimeslices_OnlyTs(casename):
     RYTTsPath.write_text(RYTTsPath.read_text().replace('Timeslice', 'TsId'))
     RYCTsPath = Path(Config.DATA_STORAGE, casename, 'RYCTs.json')
     RYCTsPath.write_text(RYCTsPath.read_text().replace('Timeslice', 'TsId'))
-##############################################################Multithreading example#########################3
-class Download(Thread):
-    def __init__(self, request, zippedFile):
-        Thread.__init__(self)
-        self.request = request
-        self.zippedFile = zippedFile
-
-    def run(self):
-        print("wait few seconds for download to finish")
-        time.sleep(20)
-        #print(self.request)
-        #remove zipped file
-        os.remove(self.zippedFile)
-        print("Deletion of zip archive done!")
 
 
 @upload_api.route("/backupCase", methods=['GET'])
@@ -310,10 +295,26 @@ def backupCase():
             #             # Add file to zip
             #             zipObj.write(filePath)   
 
-        thread_a = Download(request.__copy__(), zippedFile)
-        thread_a.start()
+        response = send_file(zippedFile.resolve(), as_attachment=True)
 
-        return send_file(zippedFile.resolve(), as_attachment=True)
+        # send_file marks the response direct_passthrough, and werkzeug skips
+        # the ClosingIterator that fires call_on_close for passthrough bodies
+        # (get_app_iter returns the raw file iterable), so the callback would
+        # never run under a real server. Disabling passthrough restores the
+        # wrapper; close() then closes the file handle first and runs the
+        # callback after, so the zip survives the whole download and the
+        # delete also succeeds on Windows, where removing an in-use file
+        # would fail.
+        response.direct_passthrough = False
+
+        def remove_zip():
+            try:
+                os.remove(zippedFile)
+            except OSError:
+                pass
+
+        response.call_on_close(remove_zip)
+        return response
 
     except PermissionError:
         return jsonify({"error": "Invalid path"}), 400
@@ -481,8 +482,6 @@ def uploadCaseUnchunked_old():
         }
 
         return jsonify(response), 200
-    except(IOError):
-        raise IOError
     except OSError:
         return jsonify({'message': 'A filesystem error occurred.', 'status_code': 'error'}), 500
 
@@ -556,7 +555,7 @@ def handle_full_zip(file, filepath=None):
 
                         resPath = Path(Config.DATA_STORAGE,casename,'res')
                         viewPath = Path(Config.DATA_STORAGE,casename,'view')
-                        resDataPath = Path(Config.DATA_STORAGE,case,'view','resData.json')
+                        resDataPath = Path(Config.DATA_STORAGE,casename,'view','resData.json')
                         
                         if os.path.exists(resPath):
                             shutil.rmtree(resPath)
@@ -759,7 +758,7 @@ def uploadXls():
                     "message": "Template " + submitted_file +" is not valid .xlsx file!",
                     "status_code": "warning",
                     "casename": case,
-                    "template": filename
+                    "template": submitted_file
                 })
 
         response = {
@@ -767,7 +766,5 @@ def uploadXls():
         }
 
         return jsonify(response), 200
-    except(IOError):
-        raise IOError
     except OSError:
         return jsonify({'message': 'A filesystem error occurred.', 'status_code': 'error'}), 500

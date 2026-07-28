@@ -232,6 +232,26 @@ export class Base {
     static uploadFunction = function () {
         Dropzone.autoDiscover = false;
 
+        const handleCaseRestoreSuccess = function (result, showWarning = false) {
+            let casename = result.casename;
+            if (casename) {
+                Html.apendModel(casename);
+            }
+
+            Message.bigBoxSuccess("Upload response", result.message, null);
+            if (showWarning && result.message_warning) {
+                Message.warningOsy(result.message_warning);
+            }
+
+            $('#modalrestore').modal('toggle');
+            if (Base.AWS_SYNC == 1 && casename) {
+                SyncS3.deleteResultsPreSync(casename)
+                    .then(response => {
+                        SyncS3.uploadSync(casename);
+                    });
+            }
+        };
+
         var MyDropzone = new Dropzone("#myDropzone", {
             //url: "http://127.0.0.1:5000/upload",
             url: Base.apiUrl() + "uploadCase",
@@ -269,22 +289,24 @@ export class Base {
             // },
             success: function (file, response) {
                 console.log('response ', response   )
-           
-                if (response.response[0]['status_code'] == 'success') {
-                    let casename = response.response[0]['casename'];
-                         console.log('casename ', casename   )
-                    Html.apendModel(casename);
-                    Message.bigBoxSuccess("Upload response", response.response[0]['message'], null);
-                    //value.previewElement.innerHTML = "";
-                    $('#modalrestore').modal('toggle');
-                    if (Base.AWS_SYNC == 1) {
-                        SyncS3.deleteResultsPreSync(casename)
-                            .then(response => {
-                                SyncS3.uploadSync(casename);
-                            });
-                    }
-                } else if (response.response[0]['status_code'] == 'warning') {
+                const result = response.response && response.response[0];
 
+                if (!result) {
+                    Message.bigBoxDanger("Upload response", "Upload completed but returned an unexpected response.", null);
+                    return;
+                }
+
+                if (result['status_code'] == 'success') {
+                    console.log('casename ', result['casename'])
+                    handleCaseRestoreSuccess(result);
+                } else if (result['status_code'] == 'warning') {
+                    if (result.message_warning) {
+                        handleCaseRestoreSuccess(result, true);
+                    } else {
+                        Message.bigBoxWarning("Upload response", result['message'], null);
+                    }
+                } else if (result['status_code'] == 'error') {
+                    Message.bigBoxDanger("Upload response", result['message'], null);
                 }
                 // $.each(file, function (key, value) {
                 //     if (response.response[key]['status_code'] == 'success') {

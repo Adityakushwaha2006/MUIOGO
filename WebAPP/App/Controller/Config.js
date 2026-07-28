@@ -107,7 +107,6 @@ export default class Config {
 
             /////////////// params
             let paramData = $('#osy-gridParam').jqxGrid('getrows');
-            console.log('   paramData', paramData   );
             let ParamData = {};
             $.each(paramData, function (id, obj) {
                 let tmp = {};
@@ -174,7 +173,6 @@ export default class Config {
                 IndicatorData[obj.groupId].push(tmp);
             });
 
-            console.log('   IndicatorData', IndicatorData );
             Osemosys.saveParamFile(ParamData, VarData, DualData, IndicatorData)
             .then(response =>{
                 Message.bigBoxSuccess('Model message', response.message, 3000);
@@ -315,7 +313,6 @@ export default class Config {
                 unitRule = model.gridDualData[id]['unitRule'];
             }
 
-            console.log('unitRule, model.unitsDef ', unitRule, model.unitsDef);
 
             $('#unitTitle').html(
                 `<h6 id="paramId" data-paramId ="${paramId}" style="display: inline-block;">
@@ -393,7 +390,6 @@ export default class Config {
                 });
                 model.srcIndicatorGrid.localdata = model.gridIndicatorData;
                 $divIndicatorGrid.jqxGrid('updatebounddata');
-                console.log('model.indicatorRuleData ', model.indicatorData);
                 Message.smallBoxInfo('Rule updated for ', model.indicatorData[groupId][paramId], 3000);
             }
 
@@ -424,7 +420,6 @@ export default class Config {
             $.each(rule, function (id, rule) {
                 arrayRule += UNITDEFINITION[rule]['name'];
             });
-            console.log('receive ', arrayRule)
             $('#ruleFormula').html(`<p>${arrayRule}</p>`);
             $('#ruleFormula').show();
          }); 
@@ -448,8 +443,6 @@ export default class Config {
             formulaRule = model.gridIndicatorData[id]['formulaRule'];
  
 
-            console.log('formulaRule ', formulaRule);
-            console.log('model.indicatorRuleData ', model.indicatorRuleData);
 
             $('#indTitle').html(
                 `<h6 id="paramId" data-paramId ="${paramId}" style="display: inline-block;">
@@ -472,7 +465,6 @@ export default class Config {
 
             let arrayRule = name +' = ';
             $.each(rule, function (id, r) {
-                console.log('rule ', id, r)
                 //arrayRule += UNITDEFINITION[r]['name'];
                 //console.log('arrayRule ',arrayRule);
                 arrayRule +=  model.indicatorDef[r]['name'];
@@ -487,8 +479,6 @@ export default class Config {
         $("#btnSaveFormula").on('click', function (event) {
             let rule = $("#osy-indFormulaSort2").jqxSortable("toArray")
 
-            console.log('rule ', rule   );
-            console.log('model.indicatorDef ', model.indicatorDef   )
 
             let paramId = $('#paramId').attr("data-paramId");
             let groupId = $('#groupId').attr("data-groupId") 
@@ -551,7 +541,6 @@ export default class Config {
                 $.each(rule, function (id, rule) {
                     arrayRule += model.indicatorDef[rule]['name'];
                 });
-                console.log('stop ', arrayRule)
                 $('#formulaView').html(`<p>${arrayRule}</p>`);
                 $('#formulaView').show();
         }); 
@@ -565,7 +554,6 @@ export default class Config {
                 $.each(rule, function (id, rule) {
                     arrayRule += model.indicatorDef[rule]['name'];
                 });
-                console.log('receive ', arrayRule)
                 $('#formulaView').html(`<p>${arrayRule}</p>`);
                 $('#formulaView').show();
         }); 

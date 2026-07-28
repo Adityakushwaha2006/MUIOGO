@@ -58,7 +58,6 @@ export default class AddCase {
                 AddCase.initPage(model);
             })
             .catch(error => {
-                console.log(' error ', error)
                 Message.bigBoxDanger(error);
             })
     }
@@ -67,7 +66,6 @@ export default class AddCase {
         Message.clearMessages();
         //$('a[href="#tabComms"]').click();
         //Navbar.initPage(model.casename, model.pageId);
-        console.log('model ', model)
         
         Html.title(model.casename, model.title, "create & edit");
         Html.genData(model);
@@ -334,7 +332,6 @@ export default class AddCase {
                 //sortingn ne utice na rowid i id i index
                 var rowid = $divTech.jqxGrid('getrowid', id);
 
-                console.log('rowid id ', rowid,id)
                 //var rows = $divTech.jqxGrid('getboundrows');
                 // // console.log('rows[rowId].uid ', rows[rowid].uid);
                 // // console.log('rows[id]].uid ', rows[id].uid);
@@ -348,11 +345,10 @@ export default class AddCase {
                 //provjera da brisemo tacnu tehnologiju
                 //console.log('techIds ', model.techs[id].TechId,techId, htmltechId,    model.techNames[techId],   model.techNames[model.techs[id].TechId],    model.techNames[htmltechId])
                 if(model.techs[id].TechId != techId ||techId != htmltechId){
-                    console.log('delete tech')  
                     Message.bigBoxDanger('Technology deletion error', `Wrong index!! <b>${model.techs[id].Tech}</b>?`, 3000);
                 }
                 if(model.techs[id].TG.length>0){          
-                    Message.confirmationDialog('Technology deletion warning', `Technology <b>${model.techs[id].Tech}</b> has technology group membership(s). Deleting the technology could impact visalisation of results for previously run cases. Are you sure you want to proceed?`, model, $divTech, id, rowid, techId)
+                    Message.confirmationDialog('Technology deletion warning', `Technology <b>${model.techs[id].Tech}</b> has technology group membership(s). Deleting the technology could impact visualisation of results for previously run cases. Are you sure you want to proceed?`, model, $divTech, id, rowid, techId)
                 }
                 else{
                     $divTech.jqxGrid('deleterow', rowid);
@@ -380,7 +376,7 @@ export default class AddCase {
                 }
             }
             else {
-                Message.bigBoxWarning('Warning', 'You cannot delete. At least one technology is neccessary.', 3000);
+                Message.bigBoxWarning('Warning', 'You cannot delete. At least one technology is necessary.', 3000);
             }
         });
 
@@ -391,7 +387,7 @@ export default class AddCase {
             var rowBoundIndex = args.rowindex;
             var value = args.newvalue.trim();
             if (column == 'CapUnitId' || column == 'ActUnitId') {
-                Message.bigBoxWarning('Unit change warninig!', 'Changing technology unit will not recalculate entered nor default values in the model.', 3000);
+                Message.bigBoxWarning('Unit change warning!', 'Changing technology unit will not recalculate entered nor default values in the model.', 3000);
             }
             if (column != 'IAR' && column != 'OAR' && column != 'EAR' && column != 'INCR' && column != 'ITCR'  && column != 'TG') {
                 model.techs[rowBoundIndex][column] = value;
@@ -577,7 +573,7 @@ export default class AddCase {
 
             let rowId = model.seCount-1;
             if(rowId == 0){
-                Message.bigBoxWarning('Warning', 'You cannot delete. At least one season is neccessary.', 3000);
+                Message.bigBoxWarning('Warning', 'You cannot delete. At least one season is necessary.', 3000);
             }else{
                 var seId = $divSe.jqxGrid('getcellvalue', rowId, 'SeId');
                 $divSe.jqxGrid('deleterow',rowId );
@@ -604,7 +600,6 @@ export default class AddCase {
             model.seasons[rowBoundIndex][column] = value;
             if (column == 'Se') {
                 var seId = $divSe.jqxGrid('getcellvalue', rowBoundIndex, 'SeId');
-                console.log('seId ', seId, value)
                 model.seNames[seId] = value;
             }
         });
@@ -665,7 +660,7 @@ export default class AddCase {
 
             let rowId = model.dtCount-1;
             if(rowId == 0){
-                Message.bigBoxWarning('Warning', 'You cannot delete. At least one day type is neccessary.', 3000);
+                Message.bigBoxWarning('Warning', 'You cannot delete. At least one day type is necessary.', 3000);
             }else{
                 var dtId = $divDt.jqxGrid('getcellvalue', rowId, 'DtId');
                 $divDt.jqxGrid('deleterow',rowId );
@@ -753,7 +748,7 @@ export default class AddCase {
             let rowId = model.dtbCount-1;
             var dtbId = $divDtb.jqxGrid('getcellvalue', rowId, 'DtbId');
             if(rowId == 0){
-                Message.bigBoxWarning('Warning', 'You cannot delete. At least one daily itme bracket is neccessary.', 3000);
+                Message.bigBoxWarning('Warning', 'You cannot delete. At least one daily time bracket is necessary.', 3000);
             }else{
                 $divDtb.jqxGrid('deleterow',rowId );
                 model.dailytimebrackets.splice(rowId, 1);
@@ -761,7 +756,6 @@ export default class AddCase {
                 delete model.dtbNames[dtbId];
                 //ovdje trebamo izbaciti season iz timeslice definicije
                 $.each(model.timeslices, function (id, obj) {
-                    console.log('dtbCount ', id, obj, dtbId)
                     if(obj.DTB == dtbId){
                         obj.DTB='DTB_0';
                     }
@@ -835,7 +829,7 @@ export default class AddCase {
                 });
             }
             else{
-                Message.bigBoxWarning('Warning', 'You cannot delete. At least one commodity is neccessary.', 3000);
+                Message.bigBoxWarning('Warning', 'You cannot delete. At least one commodity is necessary.', 3000);
             }
         });
 
@@ -846,7 +840,7 @@ export default class AddCase {
             var value = args.newvalue.trim();
             model.commodities[rowBoundIndex][column] = value;
             if (column == 'UnitId') {
-                Message.bigBoxWarning('Unit change warninig!', 'Changing commodity unit will not recalculate entered nor default values in the model.', 3000);
+                Message.bigBoxWarning('Unit change warning!', 'Changing commodity unit will not recalculate entered nor default values in the model.', 3000);
             }
             if (column == 'Comm') {
                 var commId = $divComm.jqxGrid('getcellvalue', rowBoundIndex, 'CommId');
@@ -901,7 +895,7 @@ export default class AddCase {
             var value = args.newvalue.trim();
             model.emissions[rowBoundIndex][column] = value;
             if (column == 'UnitId') {
-                Message.bigBoxWarning('Unit change warninig!', 'Changing emission unit will not recalculate entered nor default values in the model.', 3000);
+                Message.bigBoxWarning('Unit change warning!', 'Changing emission unit will not recalculate entered nor default values in the model.', 3000);
             }
             if (column == 'Emis') {
                 var emisId = $divEmi.jqxGrid('getcellvalue', rowBoundIndex, 'EmisId');
@@ -918,7 +912,6 @@ export default class AddCase {
             let defaultStg = DefaultObj.defaultStg();
             model.stg.push(JSON.parse(JSON.stringify(defaultStg[0], ['StgId', 'Stg', 'Desc',"UnitId", "TTS","TFS", "Operation"])));
             //update stgames
-            console.log('defaultStg ',defaultStg)
             model.stgNames[defaultStg[0]['StgId']] = defaultStg[0]['Stg'];
             //add row
             $divStg.jqxGrid('addrow', null, defaultStg);
@@ -952,7 +945,6 @@ export default class AddCase {
             model.stg[rowBoundIndex][column] = value;
             if (column == 'Stg') {
                 var stgId = $divStg.jqxGrid('getcellvalue', rowBoundIndex, 'StgId');
-                console.log('stgId ', stgId, value)
                 model.stgNames[stgId] = value;
             }
         });
@@ -982,7 +974,7 @@ export default class AddCase {
                 if(model.caserunByScenario[model.scenarios[id]['ScenarioId']].length != 0){
                     Message.bigBoxDanger('Alert', 
                         `You cannot delete this scenario. It is used in ${model.caserunByScenario[model.scenarios[id]['ScenarioId']]}  caserun(s)! 
-                        Plese reomve these scenario from caseruns before deletion.`, null)
+                        Please remove these scenario from caseruns before deletion.`, null)
                 }
                 else{
                     let scId = model.scenarios[id]['ScenarioId'];
@@ -1087,7 +1079,6 @@ export default class AddCase {
             event.stopImmediatePropagation();
             let defaultIndicator = DefaultObj.defaultIndicator();
             model.indicators.push(JSON.parse(JSON.stringify(defaultIndicator[0], ['IndicatorId', 'Indicator', 'Desc', 'IndicatorTypeId', 'Techs', 'Comms'])));
-            console.log('model.defaultIndicator ',defaultIndicator)
 
             $divIndicator.jqxGrid('addrow', null, defaultIndicator);
             $divIndicator.jqxGrid('updatebounddata', 'data');
@@ -1122,8 +1113,6 @@ export default class AddCase {
             }else{
                 var value = args.newvalue;
             }
-            console.log('column ', column)
-            console.log('value ', value)
             if (column != 'Techs' && column != 'Comms' && column != 'IndicatorTypeId') {
                 model.indicators[rowBoundIndex][column] = value;
             } else if (column == 'Techs' || column == 'Comms') {
@@ -1137,7 +1126,6 @@ export default class AddCase {
                 }
                 model.indicators[rowBoundIndex][column] = array;
             } else if (column == 'IndicatorTypeId') {
-                console.log('IndicatorTypeId value received:', value);
                 model.indicators[rowBoundIndex][column] = value;
             }
         });

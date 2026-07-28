@@ -567,7 +567,6 @@ export default class DataFile {
                 }
             })
             .catch(error => {
-                console.log('error ',error)
                 Message.loaderEnd();
                 Message.bigBoxDanger('Error message', error, null);
             })
@@ -580,7 +579,6 @@ export default class DataFile {
             e.stopImmediatePropagation();
             Html.renderScOrder( model.scBycs[model.cs]);
             Message.clearMessages();
-            console.log('select, ', model)
             var caserunanme = $(this).attr('data-ps');
             model.cs = caserunanme;
             Html.renderScOrder( model.scBycs[model.cs]);
@@ -614,7 +612,6 @@ export default class DataFile {
             })
             .then(data => {
                 let [DataFile, ResultCSV] = data;
-                console.log('data ', data)
                 if (ResultCSV.length != 0) {
                     $(".Results").show();
                     Html.renderCSV(ResultCSV, model.cs)
@@ -756,7 +753,6 @@ export default class DataFile {
 
                         })
                         .catch(error => {
-                            console.log(error)
                             Message.danger(error);
                         });
                 }
@@ -834,7 +830,6 @@ export default class DataFile {
 
                         })
                         .catch(error => {
-                            console.log(error)
                             Message.danger(error);
                         });
                 }
@@ -870,7 +865,7 @@ export default class DataFile {
         $("#osy-batchRun").on('click', function (event) {
             //console.log('BATCH RUN')
             Pace.restart();
-            Message.loaderStart('BATCH RUN! Plese wait...');
+            Message.loaderStart('BATCH RUN! Please wait...');
 
             let batchRunCases = [];
             $("input:checkbox[name=type]:checked").each(function(){
@@ -917,7 +912,7 @@ export default class DataFile {
         $("#osy-cleanUp").on('click', function (event) {
             //console.log('BATCH RUN')
             Pace.restart();
-            Message.loaderStart('Recycle all results! Plese wait...');
+            Message.loaderStart('Recycle all results! Please wait...');
 
             Osemosys.cleanUp(model.casename)
             .then(response => {
@@ -932,7 +927,6 @@ export default class DataFile {
                 $("#osy-lpOutput").empty();
                 $('.Cases').tab('show');
 
-                console.log('response clean up ', response) 
 
                 Sidebar.Reload(model.casename);
                 Message.clearMessages();
