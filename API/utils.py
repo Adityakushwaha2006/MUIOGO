@@ -14,4 +14,6 @@ def validate_json_fields(*fields):
     for field in fields:
         if field not in data:
             return jsonify({"error": f"Missing required field: {field}"}), 400
+        if data[field] is None:
+            return jsonify({"error": f"Required field cannot be null: {field}"}), 400
     return None, None
