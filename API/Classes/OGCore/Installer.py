@@ -449,8 +449,12 @@ class Installer:
             log(line)
 
         # A killed install can leave a .git with no working tree; the update path
-        # cannot recover it and cleanup skips pre-existing dirs, so clear it.
-        if pre_existed and not (local_path / "pyproject.toml").exists():
+        # cannot recover it and cleanup skips pre-existing dirs, so clear it. The
+        # .git check keeps that scoped: dest_parent is caller-supplied, and without
+        # it an unrelated folder of the same name would be deleted.
+        if (pre_existed
+                and (local_path / ".git").exists()
+                and not (local_path / "pyproject.toml").exists()):
             log(f"Removing unusable leftover at {local_path}; starting a fresh clone.")
             rmtree_force(local_path)
             pre_existed = local_path.exists()  # rmtree is best-effort

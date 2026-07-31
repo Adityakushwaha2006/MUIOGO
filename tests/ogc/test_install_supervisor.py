@@ -158,3 +158,50 @@ def test_run_installer_maps_cancel_timeout_and_real_exit(tmp_path, monkeypatch):
     res = Installer.run_installer(source_type="catalog", repo_name="OG-XX",
                                  dest_parent=str(tmp_path), catalog_key="og-xx", cancel=None)
     assert res["ok"] is False and "124" in res["error"] and "timed out" not in res["error"]
+
+
+def _run_over(tmp_path, monkeypatch):
+    """Drive run_installer over an existing dir without running a real installer."""
+    monkeypatch.setattr(
+        Installer, "ensure_installer_script", staticmethod(lambda: "dummy_script")
+    )
+    monkeypatch.setattr(Installer, "_stream", staticmethod(lambda *a, **k: (1, None)))
+    return Installer.run_installer(
+        source_type="catalog", repo_name="OG-XX",
+        dest_parent=str(tmp_path), catalog_key="og-xx", cancel=None,
+    )
+
+
+def test_unusable_git_leftover_is_cleared(tmp_path, monkeypatch):
+    # A clone killed part way leaves .git behind with no working tree. The update
+    # path cannot recover that, so it is removed and the install starts fresh.
+    leftover = tmp_path / "OG-XX"
+    (leftover / ".git").mkdir(parents=True)
+    (leftover / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+
+    _run_over(tmp_path, monkeypatch)
+
+    assert not leftover.exists(), "the half-clone is cleared before re-cloning"
+
+
+def test_unrelated_folder_of_the_same_name_is_kept(tmp_path, monkeypatch):
+    # dest_parent comes from the caller, so a folder that was never a clone can sit
+    # at the target path. It has no .git, so it must survive untouched.
+    mine = tmp_path / "OG-XX"
+    mine.mkdir()
+    (mine / "notes.txt").write_text("do not delete me")
+
+    _run_over(tmp_path, monkeypatch)
+
+    assert (mine / "notes.txt").read_text() == "do not delete me"
+
+
+def test_healthy_clone_is_not_cleared(tmp_path, monkeypatch):
+    # A real clone has both, and an update over it must never delete it.
+    clone = tmp_path / "OG-XX"
+    (clone / ".git").mkdir(parents=True)
+    (clone / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+
+    _run_over(tmp_path, monkeypatch)
+
+    assert (clone / "pyproject.toml").exists() and (clone / ".git").exists()
