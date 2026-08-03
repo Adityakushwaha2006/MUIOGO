@@ -18,6 +18,7 @@ import codecs
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import threading
@@ -29,7 +30,19 @@ from pathlib import Path
 from Classes.Base import Config
 
 _FETCH_TIMEOUT_SECONDS = 30
-_SUBPROCESS_TIMEOUT_SECONDS = 60 * 60  # an install can clone + uv sync large deps
+# Kill an install that produces no output for this long (a stalled clone/download). There is
+# deliberately no overall wall-clock cap: an OG-Core install can legitimately run for hours, so
+# a fixed ceiling would guillotine a healthy long install. A real build keeps logging progress,
+# so only a genuine hang goes silent and trips this; the cancel endpoint covers everything else.
+# Overridable for tests/slow links; a bad value falls back to the default rather than crashing import.
+try:
+    _INACTIVITY_TIMEOUT_SECONDS = float(
+        os.environ.get("MUIOGO_OG_INSTALL_INACTIVITY_TIMEOUT", "").strip() or 600
+    )
+except ValueError:
+    _INACTIVITY_TIMEOUT_SECONDS = 600.0
+if _INACTIVITY_TIMEOUT_SECONDS <= 0:
+    _INACTIVITY_TIMEOUT_SECONDS = 600.0
 
 
 class InstallerError(Exception):
@@ -94,7 +107,15 @@ def rmtree_force(path):
         except OSError:
             pass
 
-    shutil.rmtree(path, onerror=_on_error)
+    # A just-killed git/uv child (on Windows especially) can hold a handle for a
+    # moment, so a single rmtree may leave locked files behind (onerror swallows the
+    # in-use error). Retry a few times, then give up quietly; cleanup is best-effort.
+    for attempt in range(3):
+        shutil.rmtree(path, onerror=_on_error)
+        if not os.path.exists(path):
+            return
+        if attempt < 2:
+            time.sleep(0.5)
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -264,23 +285,60 @@ class Installer:
         return cmd
 
     @staticmethod
-    def _stream(cmd, log, cwd=None, timeout=_SUBPROCESS_TIMEOUT_SECONDS):
+    def _kill_tree(proc):
+        """Kill the child and everything it spawned (the installer launches git and uv).
+
+        A plain proc.kill() only stops the shell/powershell we launched, leaving a git or
+        uv child running and the country still effectively busy. Kill the whole tree.
+        """
+        try:
+            if Config.SYSTEM == "Windows":
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True,
+                )
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        finally:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _stream(cmd, log, cwd=None,
+                inactivity_timeout=_INACTIVITY_TIMEOUT_SECONDS, cancel=None):
         """Run cmd, stream output into `log`, return the exit code.
 
-        A reader thread drains stdout and splits on both newline and carriage-return,
-        so git and uv progress bars (which update in place with \\r) surface as they
-        arrive. The reader runs under a wall-clock deadline: if the child hangs and
-        produces nothing, the blocking read cannot stall us forever, we kill it and
-        return, so the job finishes and its country lock is released.
+        A reader thread drains stdout and splits on both newline and carriage-return, so
+        git and uv progress bars (which update in place with \\r) surface as they arrive.
+        The main thread supervises and kills the whole child tree early on a cancel request
+        or an inactivity stall (no output for inactivity_timeout, i.e. a hung clone). There is
+        no overall wall-clock cap, because an OG-Core install can legitimately run for hours;
+        a healthy install keeps logging so it never trips the stall guard, and cancel covers
+        the rest. The country lock is still released the moment the child exits or is killed.
+
+        Returns (returncode, reason): reason is None on a normal exit (returncode is the
+        child's real code), "cancelled" if a cancel was honored, or "timeout" on an inactivity
+        stall (returncode is None on those kill paths, so a child that legitimately exits
+        124/130 is never mistaken for our timeout/cancel).
         """
-        proc = subprocess.Popen(
-            cmd,
+        if cancel is not None and cancel.is_set():
+            return None, "cancelled"  # cancelled before we spawned anything
+        popen_kwargs = dict(
             cwd=str(cwd) if cwd else None,
             env=Config.ogc_clean_env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=0,  # unbuffered: deliver bytes as the child flushes them
         )
+        if Config.SYSTEM != "Windows":
+            popen_kwargs["start_new_session"] = True  # own process group, for killpg
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+
+        last_activity = [time.monotonic()]
 
         def _reader():
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -290,6 +348,7 @@ class Installer:
                     chunk = proc.stdout.read(256)
                     if not chunk:
                         break
+                    last_activity[0] = time.monotonic()
                     pending += decoder.decode(chunk)
                     while True:
                         match = re.search(r"[\r\n]", pending)
@@ -307,32 +366,54 @@ class Installer:
 
         reader = threading.Thread(target=_reader, daemon=True)
         reader.start()
-        reader.join(timeout=timeout)
 
-        if reader.is_alive():
-            # Deadline hit while the child was still running (possibly hung).
-            proc.kill()
-            log("Install timed out and was stopped.")
+        reason = None  # None -> child exited on its own; else "cancelled"/"timeout"
+        while True:
+            reader.join(timeout=1.0)  # wake at least once a second to supervise
+            if not reader.is_alive():
+                break  # EOF: the child closed its pipe and should be exiting
+            if cancel is not None and cancel.is_set():
+                log("Install cancelled.")
+                reason = "cancelled"
+                break
+            if inactivity_timeout and (time.monotonic() - last_activity[0]) > inactivity_timeout:
+                log("Install stalled with no output and was stopped.")
+                reason = "timeout"
+                break
+
+        if reason is not None:
+            Installer._kill_tree(proc)
+            try:
+                proc.wait(timeout=5)  # reap so the killed child is not left a zombie
+            except subprocess.TimeoutExpired:
+                pass
             reader.join(timeout=5)
-            if proc.stdout:
-                proc.stdout.close()
-            return 124
+            if proc.stdout and not reader.is_alive():
+                proc.stdout.close()  # only when the reader is done, to avoid an fd race
+            return None, reason
 
         # Reader saw EOF, so the child has closed its pipe and should be exiting.
         try:
             rc = proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
-            proc.kill()
-            rc = 124
-        if proc.stdout:
+            Installer._kill_tree(proc)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            reader.join(timeout=5)
+            if proc.stdout and not reader.is_alive():
+                proc.stdout.close()
+            return None, "timeout"
+        if proc.stdout and not reader.is_alive():
             proc.stdout.close()
-        return rc
+        return rc, None
 
     # ── orchestration: catalog / repo_url install ────────────────────────────
     @classmethod
     def run_installer(cls, *, source_type, repo_name, dest_parent,
                       catalog_key=None, repo_url=None, branch=None,
-                      package_name=None, log=None, progress=None):
+                      package_name=None, log=None, progress=None, cancel=None):
         """Clone + uv sync + verify one repo via the universal installer.
 
         Returns a result dict: ok, local_path, venv_path, python_path,
@@ -367,7 +448,18 @@ class Installer:
             captured.append(line)
             log(line)
 
-        rc = cls._stream(cmd, _capture)
+        # A killed install can leave a .git with no working tree; the update path
+        # cannot recover it and cleanup skips pre-existing dirs, so clear it. The
+        # .git check keeps that scoped: dest_parent is caller-supplied, and without
+        # it an unrelated folder of the same name would be deleted.
+        if (pre_existed
+                and (local_path / ".git").exists()
+                and not (local_path / "pyproject.toml").exists()):
+            log(f"Removing unusable leftover at {local_path}; starting a fresh clone.")
+            rmtree_force(local_path)
+            pre_existed = local_path.exists()  # rmtree is best-effort
+
+        rc, reason = cls._stream(cmd, _capture, cancel=cancel)
 
         venv_path = local_path / ".venv"
         python_path = Config.venv_python_path(venv_path)
@@ -377,11 +469,15 @@ class Installer:
                 rmtree_force(local_path)
             return cls._fail(local_path, venv_path, python_path, message)
 
+        if reason == "cancelled":
+            return _fresh_fail("Cancelled by user.")
+        if reason == "timeout":
+            return _fresh_fail("Install timed out and was stopped.")
         if rc != 0:
-            reason = summarize_failure(captured)
+            summary = summarize_failure(captured)
             message = (
-                f"Installer failed (exit {rc}): {reason}"
-                if reason
+                f"Installer failed (exit {rc}): {summary}"
+                if summary
                 else f"Installer exited with code {rc}."
             )
             return _fresh_fail(message)
@@ -393,6 +489,8 @@ class Installer:
         if not pkg:
             return _fresh_fail("Could not determine the package name to verify.")
 
+        if cancel is not None and cancel.is_set():
+            return _fresh_fail("Cancelled by user.")
         progress("verify_import", "Verifying the model imports")
         ok, detail = cls.verify_import(python_path, pkg)
         if not ok:
@@ -415,7 +513,7 @@ class Installer:
     # ── orchestration: register an existing local copy ───────────────────────
     @classmethod
     def register_local(cls, *, local_path, package_name=None, run_uv_sync=True,
-                       log=None, progress=None):
+                       log=None, progress=None, cancel=None):
         """Validate a local repo, optionally uv sync, verify import, return result."""
         log = log or _noop
         progress = progress or _noop
@@ -445,7 +543,13 @@ class Installer:
                 )
             progress("uv_sync", "Building the environment with uv sync")
             log("Running uv sync...")
-            rc = cls._stream(["uv", "sync", "--extra", "dev"], log, cwd=local_path)
+            rc, reason = cls._stream(["uv", "sync", "--extra", "dev"], log, cwd=local_path,
+                                     cancel=cancel)
+            if reason == "cancelled":
+                return cls._fail(local_path, venv_path, python_path, "Cancelled by user.")
+            if reason == "timeout":
+                return cls._fail(local_path, venv_path, python_path,
+                                 "uv sync timed out and was stopped.")
             if rc != 0:
                 return cls._fail(local_path, venv_path, python_path,
                                  f"uv sync exited with code {rc}.")
@@ -457,6 +561,8 @@ class Installer:
                 "No .venv found. Re-run with environment build enabled.",
             )
 
+        if cancel is not None and cancel.is_set():
+            return cls._fail(local_path, venv_path, python_path, "Cancelled by user.")
         progress("verify_import", "Verifying the model imports")
         ok, detail = cls.verify_import(python_path, pkg)
         if not ok:

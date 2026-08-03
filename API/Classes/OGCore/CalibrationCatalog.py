@@ -118,6 +118,9 @@ class CalibrationCatalog:
             entry["install_state"] = (
                 record.get("install_state", "installed") if record else "not_installed"
             )
+            # Carry the running/last job id so a reloaded page can reach getInstallStatus
+            # from this one call, without also fetching the installed list.
+            entry["install_id"] = record.get("install_id") if record else None
         return entries, source
 
     @classmethod
