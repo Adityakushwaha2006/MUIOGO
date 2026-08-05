@@ -4,6 +4,7 @@ Covers the behaviour a caller can reach without a real solve: bad input is refus
 cleanly rather than crashing, a reform cannot run ahead of its baseline, and a run
 orphaned by a restart is repaired on the next status read.
 """
+from Classes.OGCore.OGCoreCase import OGCoreCase
 from Classes.OGCore.RunJob import RunJob
 
 
@@ -197,3 +198,46 @@ def test_run_status_error_is_null_for_a_healthy_run(client, make_case, calibrati
     body = client.post("/ogc/getRunStatus",
                        json={"casename": "c1", "run_name": "base"}).get_json()
     assert body["run_state"] == "pending" and body["error"] is None
+
+
+class _RacingCase:
+    """A case that finishes its run between the first meta read and the second.
+
+    Recreates the window the repair has to survive, and records every status write so
+    a test can assert the repair was not even attempted.
+    """
+
+    def __init__(self, case):
+        self._case = case
+        self.reads = 0
+        self.writes = []
+
+    def get_run_meta(self, run_name):
+        self.reads += 1
+        status = "running" if self.reads == 1 else "completed"
+        return {"status": status, "pid": None, "error": None}
+
+    def update_run_status(self, run_name, status, **kwargs):
+        self.writes.append(status)
+
+    def __getattr__(self, item):
+        return getattr(self._case, item)
+
+
+def test_status_read_does_not_fail_a_run_that_just_completed(
+    client, make_case, calibration, monkeypatch
+):
+    """The repair decides on a re-read, so a solve that finishes between the first
+    read and the liveness check must not be overwritten as failed."""
+    case = make_case("c1", runs=[("base", "baseline", None)])
+    racing = _RacingCase(case)
+    monkeypatch.setattr(
+        "Routes.OGCore.OGCoreRunRoute.OGCoreCase",
+        lambda name: racing if name == "c1" else OGCoreCase(name),
+    )
+
+    body = client.post("/ogc/getRunStatus",
+                       json={"casename": "c1", "run_name": "base"}).get_json()
+
+    assert racing.writes == [], "a finished run must not be repaired at all"
+    assert body["run_state"] == "completed"

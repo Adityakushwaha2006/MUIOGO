@@ -25,22 +25,29 @@ from pathlib import Path
 
 from Classes.Base import Config
 
+def _timeout_from_env(name, default):
+    """Read a seconds value from the environment, falling back on anything unusable.
+
+    These are read at import, so raising here would stop the app from starting over a
+    typo in a tuning knob. A negative value is treated as unset for the same reason.
+    """
+    try:
+        value = float(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        return default
+    return default if value < 0 else value
+
+
 # A run can legitimately take hours (full transition-path solves), so the default
 # wall-clock ceiling is generous; the env var lets an operator tighten or extend it.
-RUN_TIMEOUT_SECONDS = int(os.environ.get("MUIOGO_OGC_RUN_TIMEOUT_SECONDS", "") or 6 * 3600)
+RUN_TIMEOUT_SECONDS = _timeout_from_env("MUIOGO_OGC_RUN_TIMEOUT_SECONDS", 6 * 3600)
 
-# Optional inactivity ceiling for a run that has gone silent. Disabled by default:
+# Optional inactivity ceiling for a run that has gone silent. Disabled by default (0):
 # a solve can legitimately print nothing for a long stretch, so the wall-clock cap
-# above is the always-on guard and this is opt-in for operators who want a tighter
-# one. A bad or negative value falls back to disabled rather than killing every run.
-try:
-    RUN_INACTIVITY_TIMEOUT_SECONDS = float(
-        os.environ.get("MUIOGO_OGC_RUN_INACTIVITY_TIMEOUT", "").strip() or 0
-    )
-except ValueError:
-    RUN_INACTIVITY_TIMEOUT_SECONDS = 0.0
-if RUN_INACTIVITY_TIMEOUT_SECONDS < 0:
-    RUN_INACTIVITY_TIMEOUT_SECONDS = 0.0
+# above is the always-on guard and this is opt-in for a tighter one.
+RUN_INACTIVITY_TIMEOUT_SECONDS = _timeout_from_env(
+    "MUIOGO_OGC_RUN_INACTIVITY_TIMEOUT", 0
+)
 
 # The worker script is a sibling of this module; resolve it absolutely so the spawn
 # does not depend on the current working directory.

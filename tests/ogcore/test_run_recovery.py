@@ -317,3 +317,17 @@ def test_shutdown_handlers_cover_both_kinds_of_work():
     assert app_module._stop_inflight_work.__doc__
     src = app_module._stop_inflight_work.__code__.co_names
     assert "_stop_inflight_run" in src and "_stop_inflight_installs" in src
+
+
+# ── env-var parsing must not stop the app from starting ──────────────────────
+def test_timeout_env_falls_back_on_anything_unusable(monkeypatch):
+    from Classes.OGCore.OGRunner import _timeout_from_env
+
+    monkeypatch.setenv("X_T", "abc")
+    assert _timeout_from_env("X_T", 600) == 600, "a typo must not raise at import"
+    monkeypatch.setenv("X_T", "-5")
+    assert _timeout_from_env("X_T", 600) == 600, "negative is treated as unset"
+    monkeypatch.setenv("X_T", "  90 ")
+    assert _timeout_from_env("X_T", 600) == 90
+    monkeypatch.delenv("X_T")
+    assert _timeout_from_env("X_T", 600) == 600
