@@ -3,6 +3,7 @@
 Points OG state at a per-test temp dir and clears RunJob's in-memory state, so no
 test sees another's cases, runs, or queue. Autouse, scoped to this package only.
 """
+import os
 import threading
 
 import pytest
@@ -10,15 +11,18 @@ import pytest
 from Classes.Base import Config
 from Classes.OGCore import RunJob as RunJobModule
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
+from Classes.OGCore.InstallJob import InstallJob
 from Classes.OGCore.OGCoreCase import OGCoreCase
 from Classes.OGCore.RunJob import RunJob
 
 
 def _drain_runs():
-    """Let any supervision thread finish before clearing shared state.
+    """Let any supervision thread finish, then clear the shared class state.
 
     Blanking _active under a live worker would make it finalize into the previous
-    test's directories and drain the next test's queue.
+    test's directories and drain the next test's queue. InstallJob's state is reset
+    too: the run layer refuses to start against a country with an install in flight,
+    so a leftover entry there would block every later run.
     """
     with RunJob._lock:
         active = RunJob._active
@@ -29,6 +33,11 @@ def _drain_runs():
     with RunJob._lock:
         RunJob._active = None
         RunJob._queue.clear()
+    with InstallJob._lock:
+        InstallJob._active_by_country.clear()
+        InstallJob._jobs.clear()
+        InstallJob._cancel_by_id.clear()
+        InstallJob._shutting_down = False
 
 
 @pytest.fixture(autouse=True)
@@ -88,6 +97,11 @@ class FakeRunner:
         self.killed = False
         self.iteration = None
         self.rc = 0
+        self.stalled = False
+        self.timed_out = False
+        # A real runner reports the worker's pid; the run layer persists it so a
+        # restart can clean up an orphan.
+        self.pid = os.getpid()
         FakeRunner.instances.append(self)
 
     def spawn(self, python_path, run_dir):

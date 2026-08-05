@@ -365,6 +365,14 @@ class OGCoreCase:
             meta["time_path"] = time_path
         if status in ("completed", "failed"):
             meta["completed_at"] = _utc_now_iso()
+            meta["pid"] = None  # the worker is gone; drop the stale pid
+        _write_run_meta(meta, path)
+
+    def set_run_pid(self, run_name: str, pid) -> None:
+        """Record the live worker's pid so a restart can clean up an orphan."""
+        path = self.res_path / run_name / "run_meta.json"
+        meta = File.readFile(path)
+        meta["pid"] = pid
         _write_run_meta(meta, path)
 
     def stamp_execution(
@@ -381,6 +389,7 @@ class OGCoreCase:
         meta["country"] = country
         meta["status"] = status
         meta["error"] = None
+        meta["pid"] = None  # set once the worker is actually spawned
         # Rewrite the baseline path from its name. The stored one is absolute, so it
         # is wrong for a case restored on another machine; the worker reads this file.
         name = meta.get("baseline_run_name")

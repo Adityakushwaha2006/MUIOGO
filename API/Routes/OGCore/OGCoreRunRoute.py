@@ -29,6 +29,7 @@ from Classes.OGCore import OGSchema, OGTables
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
 from Classes.OGCore.OGCoreCase import OGCoreCase, is_safe_name
 from Classes.OGCore.OGResults import OGResults
+from Classes.OGCore.OGRunner import kill_worker_tree
 from Classes.OGCore.RunJob import RunJob
 
 ogcore_run_api = Blueprint("OGCoreRunRoute", __name__, url_prefix="/ogc")
@@ -425,11 +426,20 @@ def getRunStatus():
     # A run marked running with no live supervisor was orphaned by a restart; repair
     # its meta to a terminal failed state so it does not appear stuck forever.
     if run_state == "running" and live is None:
-        case.update_run_status(
-            run_name, "failed", error="Run was interrupted by an application restart."
-        )
+        # Re-read first: the run may have finished between the read above and the
+        # live check, and marking a completed run failed would lose it.
         meta = case.get_run_meta(run_name)
         run_state = meta.get("status")
+        if run_state == "running":
+            # This is also the only repair path under a WSGI loader, which never runs
+            # the startup reconcile, so kill the orphan before its pid is cleared.
+            kill_worker_tree(meta.get("pid"), case.res_path / run_name)
+            case.update_run_status(
+                run_name, "failed",
+                error="Run was interrupted by an application restart.",
+            )
+            meta = case.get_run_meta(run_name)
+            run_state = meta.get("status")
 
     if live:
         run_stage = live.get("stage_label") or (
@@ -448,6 +458,9 @@ def getRunStatus():
         "run_stage": run_stage,
         "run_iteration": run_iteration,
         "run_log": run_log,
+        # Carried here as well as on getRuns: this is the endpoint a client polls, so
+        # without it a run that fails mid-poll reads as failed with no reason given.
+        "error": meta.get("error"),
     }), 200
 
 

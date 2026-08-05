@@ -17,9 +17,20 @@ import json
 import threading
 from pathlib import Path
 
+from Classes.Base import Config
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
+from Classes.OGCore.InstallJob import InstallJob
 from Classes.OGCore.OGCoreCase import OGCoreCase
-from Classes.OGCore.OGRunner import OGRunner
+from Classes.OGCore.OGRunner import OGRunner, kill_worker_tree
+
+# States that mean an install is in flight right now. A failed record is not here
+# on purpose: it is terminal, and it has no venv_path, so the interpreter check
+# below reports it as missing and tells the user to reinstall rather than to wait.
+_NOT_RUNNABLE_STATES = {"installing", "checking"}
+
+_BEING_INSTALLED_MESSAGE = (
+    "This calibration is being installed or updated. Try again once it finishes."
+)
 
 # The model dimensions a reform must share with its baseline. Changing any of them
 # leaves the reform describing a different model, so its results are no longer
@@ -63,6 +74,12 @@ class RunJob:
         rec = CalibrationRegistry.get(country_id)
         if rec is None:
             return None, None, "That country calibration is not installed."
+        # An install or update rewrites the very venv this run would use, so refuse
+        # while one is in flight. An update keeps the old python_path on the record,
+        # so checking that the path exists is not enough on its own.
+        if (InstallJob.is_country_active(country_id)
+                or rec.get("install_state") in _NOT_RUNNABLE_STATES):
+            return None, None, _BEING_INSTALLED_MESSAGE
         country = {
             "package_name": rec.get("package_name"),
             "is_base": rec.get("package_name") in (None, "", "ogcore"),
@@ -101,6 +118,35 @@ class RunJob:
             if act and act["casename"] == casename:
                 return True
             return any(q[0] == casename for q in cls._queue)
+
+    @classmethod
+    def is_country_running(cls, country_id: str) -> bool:
+        """True if the active or any queued run uses this country's calibration.
+
+        Lets the install layer refuse an update over a calibration a run is using,
+        which would rewrite the venv under a live worker. Case names are snapshotted
+        under the lock and their genData read outside it, so file reads never hold up
+        the run lifecycle.
+
+        Lock order: this takes RunJob._lock, and start() already nests
+        RunJob._lock -> InstallJob._lock. The install layer must therefore call this
+        without holding InstallJob._lock, or the two orders would deadlock.
+        """
+        if not country_id:
+            return False
+        with cls._lock:
+            names = set()
+            if cls._active:
+                names.add(cls._active["casename"])
+            names.update(q[0] for q in cls._queue)
+        for casename in names:
+            try:
+                gd = OGCoreCase(casename).gen_data
+                if isinstance(gd, dict) and gd.get("country_id") == country_id:
+                    return True
+            except (OSError, ValueError, KeyError, IndexError):
+                continue
+        return False
 
     # ── start ──────────────────────────────────────────────────────────────
     @classmethod
@@ -180,7 +226,7 @@ class RunJob:
             "status_code": "error",
             "message": (
                 "A reform must use the same model dimensions as its baseline "
-                "(S, T, J, M)."
+                f"({', '.join(_DIMS)})."
             ),
         }
 
@@ -215,6 +261,10 @@ class RunJob:
         try:
             try:
                 runner.spawn(python_path, run_dir)
+                try:
+                    case.set_run_pid(run_name, runner.pid)
+                except (OSError, ValueError, KeyError, IndexError):
+                    pass  # the run still proceeds; only orphan cleanup needs the pid
                 rc = runner.supervise()
             except Exception:
                 # Failure to even launch the worker is a run failure, not a crash.
@@ -227,7 +277,13 @@ class RunJob:
 
             if cancelled:
                 case.update_run_status(run_name, "failed", error="Cancelled by user.")
-            elif rc == 124:
+            elif runner.stalled:
+                case.update_run_status(
+                    run_name,
+                    "failed",
+                    error="Run produced no output for too long and was stopped.",
+                )
+            elif rc == 124 or runner.timed_out:
                 case.update_run_status(
                     run_name,
                     "failed",
@@ -300,12 +356,23 @@ class RunJob:
             act = cls._active
             if act and act["casename"] == casename and act["run_name"] == run_name:
                 act["cancelled"] = True
-                try:
-                    act["runner"].kill_tree()
-                except OSError:
-                    pass
-                # The supervision thread's finalize writes the terminal status.
-                return {"status_code": "cancelled"}
+                runner = act["runner"]
+                cancelled_active = True
+            else:
+                cancelled_active = False
+
+        if cancelled_active:
+            # Kill outside the lock: taskkill on a large Dask tree is synchronous and
+            # would otherwise block every status poll and the install routes.
+            try:
+                if runner is not None:
+                    runner.kill_tree()
+            except OSError:
+                pass
+            # The supervision thread's finalize writes the terminal status.
+            return {"status_code": "cancelled"}
+
+        with cls._lock:
 
             for item in list(cls._queue):
                 if item[0] == casename and item[1] == run_name:
@@ -327,6 +394,65 @@ class RunJob:
                 "status_code": "error",
                 "message": "That run is not running or queued.",
             }
+
+    # ── startup housekeeping ───────────────────────────────────────────────
+    @classmethod
+    def reconcile_interrupted_runs(cls) -> None:
+        """Repair runs left "running" by a previous server exit.
+
+        In-memory state is empty at startup, so a run still persisted as running has
+        no supervisor behind it. Mark it failed, and kill its worker if that process
+        somehow outlived the server (the machine never rebooted). Only "running" is
+        touched: "pending" means created or queued, not interrupted. Best-effort,
+        because startup housekeeping must never stop the app from serving.
+        """
+        try:
+            case_dirs = [d for d in Config.OGC_CASES_DIR.iterdir() if d.is_dir()]
+        except OSError:
+            return
+        for case_dir in case_dirs:
+            case = OGCoreCase(case_dir.name)
+            try:
+                run_dirs = [d for d in case.res_path.iterdir() if d.is_dir()]
+            except OSError:
+                continue
+            # Each run is handled on its own so one unreadable meta does not skip
+            # the rest of the case.
+            for run_dir in run_dirs:
+                try:
+                    meta = case.get_run_meta(run_dir.name)
+                    if not isinstance(meta, dict) or meta.get("status") != "running":
+                        continue
+                    kill_worker_tree(meta.get("pid"), run_dir)
+                    case.update_run_status(
+                        run_dir.name, "failed",
+                        error="Run was interrupted by an application restart.",
+                    )
+                except (OSError, ValueError, KeyError, IndexError):
+                    continue
+
+    # ── shutdown ───────────────────────────────────────────────────────────
+    @classmethod
+    def stop_active(cls) -> bool:
+        """Stop the running worker so a server shutdown does not orphan its tree.
+
+        Marks the run cancelled and kills the worker. If the supervision thread still
+        gets to finish it will record the failure; on a hard exit the persisted
+        "running" status is repaired by reconcile on the next start. Returns True if
+        a run was active.
+        """
+        with cls._lock:
+            act = cls._active
+            if act is None:
+                return False
+            act["cancelled"] = True
+            runner = act["runner"]
+        try:
+            if runner is not None:
+                runner.kill_tree()
+        except OSError:
+            pass
+        return True
 
     # ── live view ──────────────────────────────────────────────────────────
     @classmethod

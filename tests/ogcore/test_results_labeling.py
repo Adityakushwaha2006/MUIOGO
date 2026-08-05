@@ -219,3 +219,19 @@ def test_download_comparison_csv_keeps_baseline_and_reform(
     assert [r["Variable"] for r in parsed] == [
         "GDP Baseline", "Consumption Baseline", "GDP Reform",
     ]
+
+
+def test_wealth_moments_accepts_data_moments(client, case_with_runs, monkeypatch):
+    """OG-Core's wealth table needs data_moments to build at all, and the worker
+    accepts it, so the route has to pass it through or the table is unreachable."""
+    captured = _stub_worker(monkeypatch, [{"Moment": "Gini", "Data": 0.8, "Model": 0.7}])
+
+    resp = client.post(
+        "/ogc/getWealthMomentsTable",
+        json={"casename": "c1", "base_run": "base", "data_moments": [0.1, 0.2]},
+    )
+
+    assert resp.status_code == 200
+    argv = captured["argv"]
+    assert "--args-json" in argv
+    assert "data_moments" in argv[argv.index("--args-json") + 1]

@@ -178,3 +178,22 @@ def test_queued_run_reports_queued_stage(client, make_case, calibration, stub_la
 
     body = resp.get_json()
     assert body["run_state"] == "pending" and body["run_stage"] == "Queued"
+
+
+def test_run_status_reports_the_failure_reason(client, make_case, calibration):
+    # This is the endpoint a client polls, so it has to say why a run failed.
+    case = make_case("c1", runs=[("base", "baseline", None)])
+    case.update_run_status("base", "failed", error="Cancelled by user.")
+
+    body = client.post("/ogc/getRunStatus",
+                       json={"casename": "c1", "run_name": "base"}).get_json()
+
+    assert body["run_state"] == "failed"
+    assert body["error"] == "Cancelled by user."
+
+
+def test_run_status_error_is_null_for_a_healthy_run(client, make_case, calibration):
+    make_case("c1", runs=[("base", "baseline", None)])
+    body = client.post("/ogc/getRunStatus",
+                       json={"casename": "c1", "run_name": "base"}).get_json()
+    assert body["run_state"] == "pending" and body["error"] is None

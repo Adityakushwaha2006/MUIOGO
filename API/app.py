@@ -41,6 +41,7 @@ from Routes.DataFile.DataFileRoute import datafile_api
 from Routes.OGCore.OGCoreInstallRoute import ogcore_install_api
 from Routes.OGCore.OGCoreRunRoute import ogcore_run_api
 from Classes.OGCore.InstallJob import InstallJob
+from Classes.OGCore.RunJob import RunJob
 
 def _configure_logging():
     if getattr(_configure_logging, "_configured", False):
@@ -185,8 +186,33 @@ def _stop_inflight_installs():
         pass
 
 
+def _stop_inflight_run():
+    """Stop a model run the same way, so its worker tree is not orphaned either.
+
+    A solve is spawned detached for the same reason an install is, so a server stop
+    leaves it running unless it is told to stop. Best-effort and idempotent.
+    """
+    try:
+        if RunJob.stop_active():
+            logging.getLogger(__name__).info(
+                "Server stopping: cancelling the in-flight OG model run.")
+    except Exception:
+        pass
+
+
+def _stop_inflight_work():
+    """Shutdown cleanup for both long-running OG subprocesses.
+
+    The run goes first: killing it is immediate, while the install cleanup waits up
+    to five seconds, and a second Ctrl+C during that wait force-quits. Doing the fast
+    one first means an impatient stop still does not orphan the solve.
+    """
+    _stop_inflight_run()
+    _stop_inflight_installs()
+
+
 def _install_shutdown_handlers():
-    """Run install cleanup on Ctrl+C / SIGTERM and at normal interpreter exit.
+    """Run install and run cleanup on Ctrl+C / SIGTERM and at normal interpreter exit.
 
     atexit covers any clean shutdown (including waitress returning on Ctrl+C); the
     signal handlers cover a SIGTERM/SIGINT that would otherwise kill the process before
@@ -196,7 +222,7 @@ def _install_shutdown_handlers():
     process still exits the way that signal normally would, and a second signal during
     the cleanup wait force-quits instead of nesting another wait.
     """
-    atexit.register(_stop_inflight_installs)
+    atexit.register(_stop_inflight_work)
 
     shutting_down = {"active": False}
 
@@ -207,7 +233,7 @@ def _install_shutdown_handlers():
             os.kill(os.getpid(), signum)
             return
         shutting_down["active"] = True
-        _stop_inflight_installs()
+        _stop_inflight_work()
         signal.signal(signum, signal.SIG_DFL)
         os.kill(os.getpid(), signum)
 
@@ -233,8 +259,16 @@ if __name__ == '__main__':
     # would need to call this itself.
     InstallJob.reconcile_interrupted_jobs()
 
-    # Stop any running install cleanly when the server is stopped, so its detached
-    # process tree is not orphaned. Same deployment assumption as reconcile above.
+    # Same for a model run the previous process left behind: mark it failed and kill
+    # its worker if that process somehow outlived the server.
+    try:
+        RunJob.reconcile_interrupted_runs()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Could not reconcile interrupted runs at startup.", exc_info=True)
+
+    # Stop any running install or solve cleanly when the server is stopped, so their
+    # detached process trees are not orphaned. Same deployment assumption as above.
     _install_shutdown_handlers()
 
     def print_startup_info(host, current_port, server_name):

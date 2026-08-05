@@ -20,6 +20,7 @@ import re
 import signal
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from Classes.Base import Config
@@ -27,6 +28,19 @@ from Classes.Base import Config
 # A run can legitimately take hours (full transition-path solves), so the default
 # wall-clock ceiling is generous; the env var lets an operator tighten or extend it.
 RUN_TIMEOUT_SECONDS = int(os.environ.get("MUIOGO_OGC_RUN_TIMEOUT_SECONDS", "") or 6 * 3600)
+
+# Optional inactivity ceiling for a run that has gone silent. Disabled by default:
+# a solve can legitimately print nothing for a long stretch, so the wall-clock cap
+# above is the always-on guard and this is opt-in for operators who want a tighter
+# one. A bad or negative value falls back to disabled rather than killing every run.
+try:
+    RUN_INACTIVITY_TIMEOUT_SECONDS = float(
+        os.environ.get("MUIOGO_OGC_RUN_INACTIVITY_TIMEOUT", "").strip() or 0
+    )
+except ValueError:
+    RUN_INACTIVITY_TIMEOUT_SECONDS = 0.0
+if RUN_INACTIVITY_TIMEOUT_SECONDS < 0:
+    RUN_INACTIVITY_TIMEOUT_SECONDS = 0.0
 
 # The worker script is a sibling of this module; resolve it absolutely so the spawn
 # does not depend on the current working directory.
@@ -37,15 +51,85 @@ WORKER_PATH = Path(__file__).parent / "ogc_worker.py"
 _ITERATION_RE = re.compile(r"Iteration:\s*(\d+)")
 
 
+def _process_cmdline(pid) -> str | None:
+    """Best-effort command line of a running pid, or None if it cannot be read."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    try:
+        if Config.SYSTEM == "Windows":
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"],
+                capture_output=True, text=True, timeout=20,
+            )
+        else:
+            out = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "command="],
+                capture_output=True, text=True, timeout=20,
+            )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    return out.stdout.strip() or None
+
+
+def _names_run_dir(cmdline: str, run_dir) -> bool:
+    """True when cmdline names exactly this run directory.
+
+    A plain substring test would also match a directory this one is a prefix of, so
+    "…/res/base" would claim a worker running "…/res/base2". The match only counts
+    where the path ends at a quote, a space, or the end of the line.
+    """
+    target = str(run_dir)
+    start = 0
+    while True:
+        found = cmdline.find(target, start)
+        if found == -1:
+            return False
+        end = found + len(target)
+        if end >= len(cmdline) or cmdline[end] in "\"' \t":
+            return True
+        start = found + 1
+
+
+def kill_worker_tree(pid, run_dir) -> bool:
+    """Kill a leftover worker's process tree, but only if the pid is still that run's.
+
+    A pid recorded before a crash may since have been reused by something unrelated,
+    so this refuses unless the live command line is a worker started for this very
+    run directory. Returns True if a kill was issued. Never raises.
+    """
+    if not pid:
+        return False
+    cmdline = _process_cmdline(pid)
+    if not cmdline or WORKER_PATH.name not in cmdline:
+        return False
+    if not _names_run_dir(cmdline, run_dir):
+        return False
+    try:
+        if Config.SYSTEM == "Windows":
+            subprocess.run(
+                ["taskkill", "/PID", str(int(pid)), "/T", "/F"], capture_output=True,
+            )
+        else:
+            os.killpg(os.getpgid(int(pid)), signal.SIGKILL)
+    except (OSError, ValueError, ProcessLookupError, subprocess.SubprocessError):
+        return False
+    return True
+
+
 class OGRunner:
     """Owns one worker subprocess and its output pump."""
 
     def __init__(self):
         self.proc: subprocess.Popen | None = None
         self.iteration: int | None = None
-        self.timed_out = False
+        self.timed_out = False   # hit the wall-clock ceiling
+        self.stalled = False     # hit the inactivity ceiling
         self._tail: collections.deque = collections.deque(maxlen=200)
         self._reader: threading.Thread | None = None
+        self._last_activity = 0.0  # monotonic time of the last line seen
 
     # ── lifecycle ──────────────────────────────────────────────────────────
     def spawn(self, python_path, run_dir) -> None:
@@ -56,6 +140,10 @@ class OGRunner:
         """
         cmd = [
             str(python_path),
+            # -u matters: writing to a pipe, Python block-buffers stdout, so a solve's
+            # progress would sit in the child's buffer until it exited and the live log
+            # and iteration count would stay empty for the whole run.
+            "-u",
             str(WORKER_PATH),
             "run",
             "--run-dir",
@@ -65,12 +153,13 @@ class OGRunner:
             env=Config.ogc_clean_env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            bufsize=0,  # unbuffered: surface iteration lines as the child flushes
+            bufsize=0,  # read side unbuffered; -u above is what unbuffers the child
         )
         if Config.SYSTEM != "Windows":
             popen_kwargs["start_new_session"] = True
         self.proc = subprocess.Popen(cmd, **popen_kwargs)
 
+        self._last_activity = time.monotonic()  # start the inactivity clock
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
 
@@ -100,24 +189,41 @@ class OGRunner:
 
     def _record(self, segment: str) -> None:
         self._tail.append(segment)
+        self._last_activity = time.monotonic()  # output seen: reset the clock
         m = _ITERATION_RE.search(segment)
         if m:
             self.iteration = int(m.group(1))
 
     def supervise(self) -> int:
-        """Wait for the run under the wall-clock deadline; return the exit code.
+        """Wait for the run under its deadlines; return the exit code.
 
-        Joins the reader (which only ends when the child closes its pipe). If the
-        deadline is hit while the reader is still alive the child is presumed hung
-        and killed, returning 124. Otherwise the child has closed stdout and should
-        be exiting, so wait briefly and fall back to a kill if it does not.
+        Polls the reader (which only ends when the child closes its pipe) in short
+        slices, so both ceilings can be enforced: the wall clock, and the optional
+        inactivity one. Hitting either kills the presumed-hung child and returns 124,
+        with timed_out or stalled set so the caller can word the failure. Otherwise
+        the child has closed stdout and should be exiting, so wait briefly and fall
+        back to a kill if it does not.
         """
-        self._reader.join(timeout=RUN_TIMEOUT_SECONDS)
+        wall_deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
+        inactivity = RUN_INACTIVITY_TIMEOUT_SECONDS
 
-        if self._reader.is_alive():
+        while self._reader.is_alive():
+            self._reader.join(timeout=1.0)
+            if not self._reader.is_alive():
+                break
+            now = time.monotonic()
+            if now >= wall_deadline:
+                self.timed_out = True
+            elif inactivity and (now - self._last_activity) > inactivity:
+                self.stalled = True
+            else:
+                continue
             self.kill_tree()
-            self.timed_out = True
             self._reader.join(timeout=5)
+            try:
+                self.proc.wait(timeout=5)  # reap, or it lingers as a zombie on POSIX
+            except (subprocess.SubprocessError, OSError):
+                pass
             self._close_stdout()
             return 124
 
@@ -139,7 +245,7 @@ class OGRunner:
         if Config.SYSTEM == "Windows":
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True,
+                capture_output=True, timeout=30,
             )
         else:
             try:
@@ -155,6 +261,10 @@ class OGRunner:
                 pass
 
     # ── introspection ──────────────────────────────────────────────────────
+    @property
+    def pid(self) -> int | None:
+        return self.proc.pid if self.proc is not None else None
+
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 

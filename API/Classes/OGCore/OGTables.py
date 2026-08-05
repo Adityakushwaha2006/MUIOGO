@@ -18,6 +18,15 @@ from pathlib import Path
 
 from Classes.Base import Config
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
+from Classes.OGCore.InstallJob import InstallJob
+
+# Mirrors RunJob's install gate. Replicated rather than imported, like WORKER_PATH
+# below, so the table layer and the run layer stay independent; the resolvers are
+# held to identical behaviour by test.
+_NOT_RUNNABLE_STATES = {"installing", "checking"}
+_BEING_INSTALLED_MESSAGE = (
+    "This calibration is being installed or updated. Try again once it finishes."
+)
 
 # The worker script is a sibling of this module; resolve it absolutely so the
 # spawn does not depend on the current working directory. Kept local (not
@@ -36,7 +45,11 @@ TABLES = {
     "macro_ss": ("macro_ss", True, ("var_list",)),
     "ineq": ("ineq", False, ("var_list",)),
     "gini": ("gini", False, ("var_list",)),
-    "wealth_moments": ("wealth_moments", False, ()),
+    # OG-Core's wealth-moments table builds its frame from a "Data" column that stays
+    # empty unless data_moments is supplied, so without it the table raises rather
+    # than returning model-only rows. The worker already accepts the option; pass it
+    # through here so a caller can actually reach it.
+    "wealth_moments": ("wealth_moments", False, ("data_moments",)),
     "time_series": ("time_series", False, ()),
     "revenue_decomp": (
         "revenue_decomp",
@@ -58,6 +71,9 @@ def resolve_python(case):
     rec = CalibrationRegistry.get(country_id)
     if rec is None:
         return None, "That country calibration is not installed."
+    if (InstallJob.is_country_active(country_id)
+            or rec.get("install_state") in _NOT_RUNNABLE_STATES):
+        return None, _BEING_INSTALLED_MESSAGE
     python_path = rec.get("python_path")
     if not python_path or not Path(python_path).exists():
         return None, "The calibration's environment is missing; reinstall it."
