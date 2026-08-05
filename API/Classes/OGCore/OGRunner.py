@@ -72,8 +72,11 @@ def _process_cmdline(pid) -> str | None:
                 capture_output=True, text=True, timeout=20,
             )
         else:
+            # -ww: without it ps clips the command to the terminal width (or $COLUMNS),
+            # which cuts off the run directory at the end and makes every check below
+            # miss, so a leftover worker would never be recognised.
             out = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "command="],
+                ["ps", "-ww", "-p", str(pid), "-o", "command="],
                 capture_output=True, text=True, timeout=20,
             )
     except (OSError, ValueError, subprocess.SubprocessError):
