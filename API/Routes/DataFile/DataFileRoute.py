@@ -12,6 +12,9 @@ datafile_api = Blueprint('DataFileRoute', __name__)
 @datafile_api.route("/generateDataFile", methods=['POST'])
 def generateDataFile():
     try:
+        err, code = validate_json_fields('casename', 'caserunname')
+        if err:
+            return err, code
         casename = request.json['casename']
         caserunname = request.json['caserunname']
 
@@ -100,6 +103,9 @@ def deleteCaseRun():
 @datafile_api.route("/deleteScenarioCaseRuns", methods=['POST'])
 def deleteScenarioCaseRuns():
     try:
+        err, code = validate_json_fields('casename', 'scenarioId')
+        if err:
+            return err, code
         scenarioId = request.json['scenarioId']
         casename = request.json['casename']
 
@@ -114,6 +120,9 @@ def deleteScenarioCaseRuns():
 @datafile_api.route("/saveView", methods=['POST'])
 def saveView():
     try:
+        err, code = validate_json_fields('casename', 'param', 'data')
+        if err:
+            return err, code
         casename = request.json['casename']
         param = request.json['param']
         data = request.json['data']
@@ -129,6 +138,9 @@ def saveView():
 @datafile_api.route("/updateViews", methods=['POST'])
 def updateViews():
     try:
+        err, code = validate_json_fields('casename', 'param', 'data')
+        if err:
+            return err, code
         casename = request.json['casename']
         param = request.json['param']
         data = request.json['data']
@@ -328,6 +340,9 @@ def batchRun():
 @datafile_api.route("/cleanUp", methods=['POST'])
 def cleanUp():
     try:
+        err, code = validate_json_fields('modelname')
+        if err:
+            return err, code
         modelname = request.json['modelname']
 
         if modelname != None:

@@ -1,8 +1,11 @@
 from pathlib import Path
+import atexit
 import logging
 import os
 import secrets
+import signal
 import sys
+import time
 import warnings
 from logging.handlers import TimedRotatingFileHandler
 
@@ -37,6 +40,7 @@ from Routes.Case.ViewDataRoute import viewdata_api
 from Routes.DataFile.DataFileRoute import datafile_api
 from Routes.OGCore.OGCoreInstallRoute import ogcore_install_api
 from Routes.OGCore.OGCoreRunRoute import ogcore_run_api
+from Classes.OGCore.InstallJob import InstallJob
 
 def _configure_logging():
     if getattr(_configure_logging, "_configured", False):
@@ -158,6 +162,63 @@ def setSession():
         return jsonify('No selected parameters!'), 404
 
 
+def _stop_inflight_installs():
+    """Cancel any in-flight OG install and wait briefly for it to tear down.
+
+    Installs run in their own process group so cancel/timeout can kill the whole tree;
+    that detachment also means a plain server stop would leave them running orphaned.
+    Signalling cancel lets the running supervisors kill their trees and record the
+    failure. Best-effort and idempotent: called from the shutdown signal handler and
+    again from atexit.
+    """
+    try:
+        ids = InstallJob.cancel_all()
+        if not ids:
+            return
+        logging.getLogger(__name__).info(
+            "Server stopping: cancelling %d in-flight OG install(s).", len(ids))
+        deadline = time.monotonic() + 5.0
+        while InstallJob.active_count() and time.monotonic() < deadline:
+            time.sleep(0.1)
+    except Exception:
+        # Shutdown cleanup must never raise out of a signal handler or atexit.
+        pass
+
+
+def _install_shutdown_handlers():
+    """Run install cleanup on Ctrl+C / SIGTERM and at normal interpreter exit.
+
+    atexit covers any clean shutdown (including waitress returning on Ctrl+C); the
+    signal handlers cover a SIGTERM/SIGINT that would otherwise kill the process before
+    atexit can run. On Windows only console Ctrl+C (SIGINT) and clean exits are really
+    covered: a service/taskkill stop is uncatchable there, so cleanup then relies on the
+    next start's reconcile pass. The handler re-raises the default disposition so the
+    process still exits the way that signal normally would, and a second signal during
+    the cleanup wait force-quits instead of nesting another wait.
+    """
+    atexit.register(_stop_inflight_installs)
+
+    shutting_down = {"active": False}
+
+    def _handler(signum, _frame):
+        if shutting_down["active"]:
+            # Second Ctrl+C/SIGTERM while cleanup is running: give up and terminate now.
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+            return
+        shutting_down["active"] = True
+        _stop_inflight_installs()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _handler)
+        except (ValueError, OSError):
+            # Not the main thread, or a platform without this signal: skip.
+            pass
+
+
 if __name__ == '__main__':
 # if __name__ == 'app':
     #potrebno radi module js importa u index.html ES6 modules
@@ -165,6 +226,16 @@ if __name__ == '__main__':
     import mimetypes
     mimetypes.add_type('application/javascript', '.js')
     port = int(os.environ.get("PORT", 5002))
+
+    # Fail any OG install left mid-flight by a previous restart, so it does not read as
+    # installing forever. Runs when the server actually starts, not on mere import. Note:
+    # this is tied to launching via `python app.py`; a WSGI loader that imports app:app
+    # would need to call this itself.
+    InstallJob.reconcile_interrupted_jobs()
+
+    # Stop any running install cleanly when the server is stopped, so its detached
+    # process tree is not orphaned. Same deployment assumption as reconcile above.
+    _install_shutdown_handlers()
 
     def print_startup_info(host, current_port, server_name):
         mode = 'local' if Config.HEROKU_DEPLOY == 0 else 'heroku'
