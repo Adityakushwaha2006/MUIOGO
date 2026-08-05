@@ -21,9 +21,10 @@ from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
 from Classes.OGCore.OGCoreCase import OGCoreCase
 from Classes.OGCore.OGRunner import OGRunner
 
-# The four model dimensions a reform must share with its baseline. If a reform
-# changed S/T/J/M it would no longer be comparable to the baseline it reforms.
-_DIMS = ("S", "T", "J", "M")
+# The model dimensions a reform must share with its baseline. Changing any of them
+# leaves the reform describing a different model, so its results are no longer
+# comparable: periods, horizon, ability types, industries and consumption goods.
+_DIMS = ("S", "T", "J", "M", "I")
 
 
 def _read_json(path: Path):
@@ -120,9 +121,12 @@ class RunJob:
             # Guard 1: reform must run against a completed baseline, and a transition
             # -path reform needs the baseline itself to have solved the full path.
             if meta.get("run_type") == "reform":
+                # Resolved from the baseline's name, not the absolute path stored at
+                # creation, so a case restored on another machine still validates.
+                baseline_dir = case.baseline_dir(run_name)
                 baseline_meta = _read_json(
-                    Path(meta.get("baseline_output_path") or "") / "run_meta.json"
-                ) if meta.get("baseline_output_path") else None
+                    baseline_dir / "run_meta.json"
+                ) if baseline_dir else None
                 if time_path:
                     if (
                         baseline_meta is None
@@ -144,9 +148,9 @@ class RunJob:
 
                 # Guard 2: reform must share the baseline's model dimensions.
                 reform_params = _read_json(case.run_params_path(run_name)) or {}
-                baseline_params = _read_json(
-                    Path(meta["baseline_output_path"]) / "ogcParams.json"
-                ) or {}
+                baseline_params = (
+                    _read_json(baseline_dir / "ogcParams.json") or {}
+                ) if baseline_dir else {}
                 for dim in _DIMS:
                     in_reform = dim in reform_params
                     in_baseline = dim in baseline_params

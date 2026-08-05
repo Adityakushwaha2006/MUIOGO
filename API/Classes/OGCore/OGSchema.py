@@ -191,12 +191,53 @@ def project_entry(name: str, entry) -> dict:
 
 def _project_all(defaults: dict, into: dict) -> None:
     """Project every entry of ``defaults`` (skipping the top-level schema key)
-    into ``into``; a later call overwrites an earlier key so a country overlay
-    wins over the base model."""
+    into ``into``. Used for the base file, whose entries carry full metadata."""
     for name, entry in defaults.items():
         if name == "schema":
             continue
         into[name] = project_entry(name, entry)
+
+
+# Keys that only appear in OG-Core's full metadata form, never in a bare value.
+_METADATA_MARKERS = ("value", "validators", "title", "section_1")
+
+
+def _is_metadata_entry(entry) -> bool:
+    """True when an entry carries full parameter metadata rather than a bare value."""
+    return isinstance(entry, dict) and any(k in entry for k in _METADATA_MARKERS)
+
+
+def _with_default(entry: dict, value) -> dict:
+    """Copy of a projected entry carrying ``value`` as its default."""
+    out = dict(entry)
+    if _leaf_count(value) > _LARGE_VALUE_THRESHOLD:
+        out["default"] = None
+        out["large"] = True
+    else:
+        out["default"] = value
+        out.pop("large", None)
+    return out
+
+
+def _overlay_values(defaults: dict, into: dict) -> None:
+    """Overlay a country defaults file onto the base projection.
+
+    A country file stores bare values (``"frisch": 0.4``), not metadata objects, so
+    projecting it like the base file would replace every title, description and
+    range with an empty one. Keep the base metadata and swap in the country's own
+    default, which is the value the user actually has.
+    """
+    for name, value in defaults.items():
+        if name == "schema":
+            continue
+        if _is_metadata_entry(value):
+            into[name] = project_entry(name, value)
+            continue
+        base = into.get(name)
+        if base is None:
+            # A parameter the base model does not define: no metadata to keep.
+            base = project_entry(name, {})
+        into[name] = _with_default(base, value)
 
 
 def build_schema(case) -> tuple[dict | None, str | None]:
@@ -234,6 +275,6 @@ def build_schema(case) -> tuple[dict | None, str | None]:
         if overlay_file is not None:
             overlay_defaults = load_defaults(overlay_file)
             if overlay_defaults:
-                _project_all(overlay_defaults, schema)
+                _overlay_values(overlay_defaults, schema)
 
     return schema, None

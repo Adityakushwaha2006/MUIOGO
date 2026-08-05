@@ -83,6 +83,19 @@ def _utc_now_z():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# The worker reads a run's parameters when it launches, not when the run is queued,
+# so a write after submission would either silently disagree with a finished run's
+# results or slip past the dimension guard a queued run already passed.
+_BUSY_PARAMS_MESSAGE = (
+    "That run is running or queued; its parameters cannot be changed until it finishes."
+)
+
+# A case backup carries a run's full results, so it is legitimately large. These
+# cap the upload itself, and separately what a small archive may expand into.
+_MAX_BACKUP_BYTES = 512 * 1024 * 1024
+_MAX_BACKUP_UNPACKED_BYTES = 2 * 1024 * 1024 * 1024
+
+
 # ── 1. read active-case session ──────────────────────────────────────────────
 @ogcore_run_api.route("/getSession", methods=["GET"])
 def getSession():
@@ -272,6 +285,14 @@ def deleteRun():
     in_index = any(r.get("RunName") == run_name for r in case.gen_data.get("ogc-runs", []))
     if not in_index:
         return _err("Run not found.", http=404)
+    # Deleting the baseline removes the whole case, so it has to clear the same
+    # session gate deleteCase does; without it this is an unguarded case delete.
+    if case.get_baseline_name() == run_name:
+        active = session.get("ogccase")
+        if active is None:
+            return _err("No active session.", http=403)
+        if active != casename:
+            return _err("Unauthorised: case does not match active session.", http=403)
     if RunJob.case_busy(casename) and (
         RunJob.is_busy(casename, run_name) or case.get_baseline_name() == run_name
     ):
@@ -324,6 +345,8 @@ def saveParams():
     run_dir = case.res_path / data["run_name"]
     if not run_dir.is_dir():
         return _err("Run not found.", http=404)
+    if RunJob.is_busy(data["casename"], data["run_name"]):
+        return _err(_BUSY_PARAMS_MESSAGE)
     case.save_params(data["run_name"], params)
     return jsonify({"message": "Parameters saved.", "status_code": "success"}), 200
 
@@ -764,6 +787,8 @@ def uploadTaxParams():
     run_dir = case.res_path / run_name
     if not run_dir.is_dir():
         return _err("Run not found.", http=404)
+    if RunJob.is_busy(casename, run_name):
+        return _err(_BUSY_PARAMS_MESSAGE)
 
     upload = request.files.get("file")
     if upload is None or not upload.filename:
@@ -1036,6 +1061,10 @@ def restoreCase():
         return _err("No file uploaded.")
     if not upload.filename.lower().endswith(".zip"):
         return _err("The backup must be a .zip file.")
+    if (request.content_length is not None
+            and request.content_length > _MAX_BACKUP_BYTES):
+        limit_mb = _MAX_BACKUP_BYTES // (1024 * 1024)
+        return _err(f"The backup is too large (max {limit_mb}MB).", http=413)
 
     fd, tmp_path = tempfile.mkstemp(suffix=".zip")
     os.close(fd)
@@ -1071,6 +1100,12 @@ def restoreCase():
             for member in names:
                 if _unsafe_zip_member(member):
                     return _err("The backup contains unsafe paths.")
+
+            # A small archive can still expand to fill the disk, so check the
+            # declared uncompressed size before extracting anything.
+            total = sum(info.file_size for info in zf.infolist())
+            if total > _MAX_BACKUP_UNPACKED_BYTES:
+                return _err("The backup expands to too much data.", http=413)
 
             # Extract each file member by hand (not extractall) so nothing lands
             # outside target_dir even if a member survived the checks above.

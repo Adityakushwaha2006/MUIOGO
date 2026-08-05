@@ -4,7 +4,9 @@ per run: a baseline and a reform are the same model with different params."""
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,6 +43,20 @@ def is_safe_name(name) -> bool:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _write_run_meta(meta: dict, path: Path) -> None:
+    """Write a run's meta atomically (temp file, then replace).
+
+    getRuns and getRunStatus poll this file every few seconds while a run writes to
+    it, so a half-written file would be read as corrupt. The worker already writes
+    its own status file this way.
+    """
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=True, indent=4)
+    os.replace(tmp, path)
 
 
 class OGCoreCase:
@@ -205,6 +221,9 @@ class OGCoreCase:
         run_meta = {
             "run_name": run_name,
             "run_type": run_type,
+            # The name is the portable half: the absolute path below is rewritten at
+            # launch, so a case restored elsewhere still finds its baseline.
+            "baseline_run_name": baseline_run_name if run_type == "reform" else None,
             "baseline_output_path": baseline_output_path,
             "time_path": None,
             "status": "pending",
@@ -212,12 +231,12 @@ class OGCoreCase:
             "created_at": _utc_now_iso(),
             "completed_at": None,
         }
-        File.writeFile(run_meta, run_path / "run_meta.json")
+        _write_run_meta(run_meta, run_path / "run_meta.json")
 
         gd = self.gen_data
         runs = gd.get("ogc-runs", [])
         runs.append({
-            "RunId": f"run_{len(runs)}",
+            "RunId": self._next_run_id(runs),
             "RunName": run_name,
             "RunType": run_type,
             "baseline_run_name": baseline_run_name,
@@ -226,6 +245,35 @@ class OGCoreCase:
         self._write_gen_data(gd)
         logger.info("Created %s run '%s' in case '%s'", run_type, run_name, self.casename)
         return {"message": "Run created.", "status_code": "success"}
+
+    @staticmethod
+    def _next_run_id(runs: list) -> str:
+        """Next unused run id. Counting entries would reuse an id after a delete."""
+        highest = -1
+        for run in runs:
+            raw = str(run.get("RunId", ""))
+            if raw.startswith("run_") and raw[4:].isdigit():
+                highest = max(highest, int(raw[4:]))
+        return f"run_{highest + 1}"
+
+    def baseline_dir(self, run_name: str) -> Path | None:
+        """Where this reform's baseline lives, resolved against this case.
+
+        run_meta stores an absolute baseline path, which goes stale as soon as the
+        case is restored on another machine or the install moves. Resolve from the
+        baseline's name instead, falling back to the leaf of the stored path for
+        runs created before the name was recorded.
+        """
+        meta = self.get_run_meta(run_name)
+        if not meta:
+            return None
+        name = meta.get("baseline_run_name")
+        if not name:
+            stored = meta.get("baseline_output_path")
+            name = Path(stored).name if stored else None
+        if not name:
+            return None
+        return self.res_path / name
 
     def get_baseline_name(self) -> str | None:
         if not self.gen_data_path.exists():
@@ -265,8 +313,15 @@ class OGCoreCase:
         for run in self.gen_data.get("ogc-runs", []):
             item = dict(run)  # copy so we don't mutate cached gen_data
             meta_path = self.res_path / item["RunName"] / "run_meta.json"
+            meta = None
             if meta_path.exists():
-                meta = File.readFile(meta_path)
+                # An unreadable meta must not break the whole listing; the run just
+                # reads as pending until its next write.
+                try:
+                    meta = File.readFile(meta_path)
+                except (OSError, ValueError, KeyError, IndexError):
+                    meta = None
+            if isinstance(meta, dict):
                 item["status"] = meta.get("status", "pending")
                 item["time_path"] = meta.get("time_path")
                 item["completed_at"] = meta.get("completed_at")
@@ -310,7 +365,7 @@ class OGCoreCase:
             meta["time_path"] = time_path
         if status in ("completed", "failed"):
             meta["completed_at"] = _utc_now_iso()
-        File.writeFile(meta, path)
+        _write_run_meta(meta, path)
 
     def stamp_execution(
         self,
@@ -326,10 +381,18 @@ class OGCoreCase:
         meta["country"] = country
         meta["status"] = status
         meta["error"] = None
-        File.writeFile(meta, path)
+        # Rewrite the baseline path from its name. The stored one is absolute, so it
+        # is wrong for a case restored on another machine; the worker reads this file.
+        name = meta.get("baseline_run_name")
+        if not name and meta.get("baseline_output_path"):
+            name = Path(meta["baseline_output_path"]).name
+        if name:
+            meta["baseline_run_name"] = name
+            meta["baseline_output_path"] = str(self.res_path / name)
+        _write_run_meta(meta, path)
 
     def set_run_provenance(self, run_name: str, provenance: dict) -> None:
         path = self.res_path / run_name / "run_meta.json"
         meta = File.readFile(path)
         meta["provenance"] = provenance
-        File.writeFile(meta, path)
+        _write_run_meta(meta, path)
