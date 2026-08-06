@@ -634,11 +634,22 @@ def tables_command(args) -> int:
                 **kwargs,
             )
         elif table == "wealth_moments":
+            # OG-Core builds this table from a "Data" column of survey moments that
+            # stays empty unless they are supplied, so the frame cannot be built at
+            # all without them. When the caller has none, hand it blanks and drop the
+            # column afterwards, which leaves the model's own numbers. A scalar
+            # broadcasts, so this does not depend on how many moments there are.
+            kwargs = dict(opts)
+            model_only = "data_moments" not in kwargs
+            if model_only:
+                kwargs["data_moments"] = float("nan")
             df = ot.wealth_moments_table(
                 _dir_ss(base_dir, "Baseline"),
                 _dir_params(base_dir, "Baseline"),
-                **opts,
+                **kwargs,
             )
+            if model_only:
+                df = df.drop(columns=["Data"], errors="ignore")
         elif table == "time_series":
             kwargs = dict(opts)
             if reform_dir is not None:

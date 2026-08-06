@@ -235,3 +235,22 @@ def test_wealth_moments_accepts_data_moments(client, case_with_runs, monkeypatch
     argv = captured["argv"]
     assert "--args-json" in argv
     assert "data_moments" in argv[argv.index("--args-json") + 1]
+
+
+def test_wealth_moments_asks_for_blank_data_when_none_given(
+    client, case_with_runs, monkeypatch
+):
+    """OG-Core cannot build this table without a Data column, so the worker fills it
+    with blanks and drops it again; the caller gets the model's own numbers."""
+    captured = _stub_worker(monkeypatch, [{"Moment": "Gini", "Model": 0.57}])
+
+    resp = client.post("/ogc/getWealthMomentsTable",
+                       json={"casename": "c1", "base_run": "base"})
+
+    assert resp.status_code == 200
+    assert "Data" not in resp.get_json()[0]
+    # Nothing is asked of the worker: it supplies the blanks itself.
+    argv = captured["argv"]
+    assert "--args-json" not in argv or "data_moments" not in argv[
+        argv.index("--args-json") + 1
+    ]
