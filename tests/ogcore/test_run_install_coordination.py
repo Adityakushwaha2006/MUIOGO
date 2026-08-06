@@ -8,6 +8,7 @@ import pytest
 
 from Classes.OGCore import OGTables
 from Classes.OGCore import RunJob as RunJobModule
+from Classes.OGCore.CalibrationCatalog import CalibrationCatalog
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
 from Classes.OGCore.InstallJob import InstallJob
 from Classes.OGCore.RunJob import RunJob
@@ -154,11 +155,9 @@ def test_update_allowed_once_no_run_is_using_it(
     assert started["country_id"] == "ETH", "the update actually started"
 
 
-
 def test_install_over_an_existing_calibration_refused_while_running(
     client, make_case, calibration, stub_launch, monkeypatch
 ):
-    from Classes.OGCore.CalibrationCatalog import CalibrationCatalog
     monkeypatch.setattr(
         CalibrationCatalog, "find_entry",
         classmethod(lambda cls, key: {

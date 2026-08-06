@@ -14,15 +14,7 @@ import Classes.OGCore.OGRunner as OGRunnerMod
 from Classes.OGCore.OGRunner import OGRunner, kill_worker_tree
 from Classes.OGCore.RunJob import RunJob
 
-
-def _wait_idle(timeout=10.0):
-    end = time.time() + timeout
-    while time.time() < end:
-        with RunJob._lock:
-            if RunJob._active is None:
-                return True
-        time.sleep(0.01)
-    return False
+from .conftest import wait_idle
 
 
 # ── stopping the active run ──────────────────────────────────────────────────
@@ -40,7 +32,7 @@ def test_stop_active_kills_the_worker_and_finalises(
     assert RunJob.stop_active() is True
 
     assert fake_runner[0].killed is True
-    assert _wait_idle(), "the supervision thread finished"
+    assert wait_idle(), "the supervision thread finished"
     meta = case.get_run_meta("base")
     assert meta["status"] == "failed" and meta["error"] == "Cancelled by user."
 
@@ -59,7 +51,7 @@ def test_worker_pid_is_recorded_while_running_and_cleared_after(
     assert case.get_run_meta("base")["pid"] is not None
 
     fake_runner[0].finish(rc=1)
-    assert _wait_idle()
+    assert wait_idle()
     assert case.get_run_meta("base")["pid"] is None, "a finished run keeps no pid"
 
 
@@ -238,7 +230,7 @@ def test_a_stalled_run_says_so(make_case, calibration, fake_runner):
 
     fake_runner[0].finish(rc=124)
 
-    assert _wait_idle()
+    assert wait_idle()
     assert "no output" in case.get_run_meta("base")["error"].lower()
 
 
@@ -303,7 +295,7 @@ def test_shutdown_stops_the_active_run(make_case, calibration, fake_runner):
     app_module._stop_inflight_work()
 
     assert fake_runner[0].killed is True, "server shutdown must stop the solve too"
-    assert _wait_idle()
+    assert wait_idle()
 
 
 def test_shutdown_is_a_noop_when_nothing_is_running():

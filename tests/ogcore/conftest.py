@@ -5,6 +5,7 @@ test sees another's cases, runs, or queue. Autouse, scoped to this package only.
 """
 import os
 import threading
+import time
 
 import pytest
 
@@ -14,6 +15,17 @@ from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
 from Classes.OGCore.InstallJob import InstallJob
 from Classes.OGCore.OGCoreCase import OGCoreCase
 from Classes.OGCore.RunJob import RunJob
+
+
+def wait_idle(timeout=10.0):
+    """Wait for the supervision thread to finish and release the execution slot."""
+    end = time.time() + timeout
+    while time.time() < end:
+        with RunJob._lock:
+            if RunJob._active is None:
+                return True
+        time.sleep(0.01)
+    return False
 
 
 def _drain_runs():

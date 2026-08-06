@@ -9,6 +9,8 @@ import time
 
 from Classes.OGCore.RunJob import RunJob
 
+from .conftest import wait_idle
+
 
 def test_second_run_queues_behind_the_first(make_case, calibration, stub_launch):
     make_case("c1", runs=[("base", "baseline", None)])
@@ -74,17 +76,6 @@ def test_queue_advances_when_the_slot_frees(make_case, calibration, stub_launch)
     assert case2.get_run_meta("base")["status"] == "running"
 
 
-def _wait_idle(timeout=10.0):
-    """Wait for the supervision thread to finish and release the slot."""
-    end = time.time() + timeout
-    while time.time() < end:
-        with RunJob._lock:
-            if RunJob._active is None:
-                return True
-        time.sleep(0.01)
-    return False
-
-
 def test_cancel_active_run_reaches_terminal_state(make_case, calibration, fake_runner):
     """The real thread path: cancel kills the worker and finalizes the run."""
     case = make_case("c1", runs=[("base", "baseline", None)])
@@ -96,7 +87,7 @@ def test_cancel_active_run_reaches_terminal_state(make_case, calibration, fake_r
 
     assert result["status_code"] == "cancelled"
     assert fake_runner[0].killed is True, "the worker tree is killed"
-    assert _wait_idle(), "the supervision thread finished and freed the slot"
+    assert wait_idle(), "the supervision thread finished and freed the slot"
     meta = case.get_run_meta("base")
     assert meta["status"] == "failed"
     assert meta["error"] == "Cancelled by user."
@@ -114,7 +105,7 @@ def test_finished_run_completes_and_frees_the_slot(make_case, calibration, fake_
 
     fake_runner[0].finish(rc=0)
 
-    assert _wait_idle()
+    assert wait_idle()
     assert case.get_run_meta("base")["status"] == "completed"
 
 

@@ -51,12 +51,6 @@ class OGResults:
     """Assembles dashboard-ready results from a run's plain JSON files."""
 
     @staticmethod
-    def run_completed(case, run_name) -> bool:
-        """True when the run's meta records a completed status."""
-        meta = case.get_run_meta(run_name)
-        return isinstance(meta, dict) and meta.get("status") == "completed"
-
-    @staticmethod
     def load_ss(run_dir):
         """The run's steady-state variables, or None if not readable."""
         return read_json(Path(run_dir) / "results_ss.json")

@@ -373,7 +373,6 @@ class RunJob:
             return {"status_code": "cancelled"}
 
         with cls._lock:
-
             for item in list(cls._queue):
                 if item[0] == casename and item[1] == run_name:
                     cls._queue.remove(item)

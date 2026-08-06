@@ -1,10 +1,15 @@
 """Spawn and supervise ONE OG worker process.
 
-This layer owns streaming, the wall-clock watchdog, and the kill. It never decides
-business state: it launches the worker under the calibration's own interpreter,
-drains its output, enforces a hard run-time deadline, and reports back an exit code.
-Whether a run "completed" or "failed" is decided by RunJob from that exit code plus
-the worker's terminal run_status.json, never from anything this class reads.
+This layer owns streaming, the run ceilings, and the kill. It never decides business
+state: it launches the worker under the calibration's own interpreter, drains its
+output, stops a run that outlives its wall-clock deadline or goes silent for too
+long, and reports back an exit code. Whether a run "completed" or "failed" is
+decided by RunJob from that exit code plus the worker's terminal run_status.json,
+never from anything this class reads.
+
+kill_worker_tree is the one piece that works without a live runner: it stops a
+worker left behind by a previous process, which is why it identifies its target
+from the command line rather than from any state held here.
 
 The streaming mechanism deliberately mirrors Installer._stream (a daemon reader
 thread draining 256-byte chunks, splitting on \\r and \\n) rather than importing it:
@@ -274,9 +279,6 @@ class OGRunner:
     @property
     def pid(self) -> int | None:
         return self.proc.pid if self.proc is not None else None
-
-    def alive(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
 
     def log_tail(self) -> list:
         return list(self._tail)
