@@ -1,0 +1,135 @@
+/* MUIOGO shell: brand, model selector and per-model navigation.
+   Lives in its own file so upstream MUIO css (osy.css, demo.css) stays untouched
+   and upstream syncs merge cleanly. Loaded after osy.css, overrides win on order. */
+
+/* ===== palette ===== */
+:root{
+    --osy-slate:#3a3f51;
+    --osy-og:#f58220; --osy-og-dark:#c96a14;          /* OG-Core accent */
+    /* CLEWS accent inherits MUIO's theme green from osy.css */
+    --osy-clews:var(--second-color); --osy-clews-dark:var(--second-darker-color);
+    --osy-unblue:#009edb;                             /* where the models combine */
+}
+
+/* ===== brand: logo + MUIOGO wordmark on the slate bar =====
+   sized to #header (full height, flex centered) rather than assuming the bar
+   height, which smartadmin defines differently across layout variants */
+.navbar-brand{
+    background-color:var(--osy-slate)!important;
+    height:100%!important;padding:0 14px!important;margin:0!important;
+    display:flex!important;align-items:center;gap:8px;overflow:hidden;
+}
+.navbar-brand .osy-logo{width:30px;height:30px;flex:0 0 auto}
+.navbar-brand .osy-wm{font-size:17px;letter-spacing:.3px;color:#fff;font-weight:600;line-height:1;white-space:nowrap}
+.navbar-brand .osy-wm .osy-go{color:var(--osy-unblue);font-weight:800}
+.navbar-brand .osy-wm sub{font-size:9px;color:#aeb3c0;font-weight:normal}
+
+/* ===== model selector in the header ===== */
+/* full bar height + flex, centered with the brand. The #header > prefix is
+   required to outrank smartadmin's `#header>div{display:inline-block}` */
+#header > .osy-modelctx{float:left;display:flex;align-items:center;gap:8px;height:100%;margin:0;padding:0 0 0 16px;font-size:12px}
+.osy-modelctx .osy-mlabel{color:#8a8f9c}
+.osy-modelbtn{
+    display:inline-flex;align-items:center;gap:7px;background:#555c77;color:#cfd3dc;
+    border:1px solid transparent;padding:5px 12px;border-radius:2px;cursor:pointer;
+    font-family:inherit;font-size:12px;
+}
+.osy-modelbtn:hover{background:#626a86;color:#fff}
+/* active state is css-driven off the body mode class, no js timing on the async navbar load */
+body.osy-mode-og #osy-mb-og{background:var(--osy-og);border-color:var(--osy-og-dark);color:#fff;font-weight:700}
+body.osy-mode-clews #osy-mb-clews{background:var(--osy-clews);border-color:var(--osy-clews-dark);color:#fff;font-weight:700}
+
+/* ===== slate header (the skin paints #header white) ===== */
+#header{background:var(--osy-slate)!important;border-bottom:1px solid #20232d!important;box-shadow:none!important}
+/* the fixed-header variant carries a light border, a box shadow and a 1164px
+   max-width, all of which assume the light bar */
+.fixed-header #header{max-width:none!important;box-shadow:none!important;border-bottom:1px solid #20232d!important}
+
+/* CLEWS case picker and run title on the dark bar, centered to the bar height
+   (the skin's fixed top padding assumes the light layout) */
+.project-context{height:100%;display:flex!important;flex-direction:column;justify-content:center;padding:0 13px!important;position:relative}
+.project-context>:first-child{color:#8a8f9c!important;text-shadow:none!important}
+.project-selector{color:#cfd3dc!important}
+.project-selector:hover{color:#fff!important}
+#osy-runtitle{color:#cfd3dc}
+
+/* right side header tools, flat dark buttons */
+.btn-header>:first-child>a{background:#555c77!important;background-image:none!important;border:1px solid transparent!important;color:#cfd3dc!important}
+.btn-header>:first-child>a:hover{background:#626a86!important;color:#fff!important;border-color:transparent!important;box-shadow:none!important}
+
+/* ===== per-model chrome =====
+   CLEWS-only navbar pieces (case picker, run title) hide outside CLEWS mode. */
+body:not(.osy-mode-clews) .project-context,
+body:not(.osy-mode-clews) #osy-runtitle{display:none!important}
+
+/* Sidebar: the CLEWS menu shows only in CLEWS mode, elsewhere only Home.
+   !important because Sidebar.js toggles inline display on the CLEWS items. */
+body.osy-mode-none #Navi > li:not(.nav-home),
+body.osy-mode-og #Navi > li:not(.nav-home){display:none!important}
+
+/* ===== OG-Core accent: orange; green stays CLEWS-only ===== */
+.osy-og-ico{color:var(--osy-og)!important}
+/* the skin's active nav marker, stripe recolored per model */
+body.osy-mode-og.smart-style-4:not(.menu-on-top) nav ul li.active:not(.open)>a:before,
+body.osy-mode-og.smart-style-4 nav>ul>li.active:not(.open)>a:before{border-left-color:var(--osy-og)}
+body.osy-mode-clews.smart-style-4:not(.menu-on-top) nav ul li.active:not(.open)>a:before,
+body.osy-mode-clews.smart-style-4 nav>ul>li.active:not(.open)>a:before{border-left-color:var(--osy-clews)}
+
+/* collapse tab follows the model accent; one element serves both the expanded
+   and minified states */
+body.osy-mode-og .minifyme{background:var(--osy-og)!important;color:#fff!important}
+body.osy-mode-og .minifyme:hover{background:var(--osy-og-dark)!important}
+
+/* ===== OG-Core pages: scoped UI island, all styles under .ogc-* ===== */
+.ogc-page{max-width:1400px;padding:6px 8px}
+.ogc-title{font-size:26px;font-weight:400;color:#3a3f51;margin:0 0 4px}
+.ogc-sub{color:#8a8f9c;font-size:13px;margin-bottom:18px}
+
+/* responsive card grid: 4 / 3 / 2 / 1 columns by width */
+.ogc-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+@media (max-width:1400px){.ogc-grid{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:1100px){.ogc-grid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:700px){.ogc-grid{grid-template-columns:1fr}}
+
+.ogc-card{background:#fff;border:1px solid #e4e4e4;border-radius:3px;padding:14px;border-top:3px solid #e4e4e4;
+    transition:box-shadow .15s ease,transform .15s ease}
+.ogc-card:hover{box-shadow:0 4px 14px rgba(0,0,0,.09);transform:translateY(-1px)}
+.ogc-card.ogc-on{border-top-color:var(--osy-og)}
+.ogc-card-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px}
+.ogc-card-title{flex:1 1 auto;min-width:0}
+img.ogc-flag{width:34px;height:26px;object-fit:cover;border-radius:3px;border:1px solid #e4e4e4;flex:0 0 auto}
+span.ogc-flag-none{width:34px;height:26px;display:flex;align-items:center;justify-content:center;color:#9aa0b4;flex:0 0 auto}
+.ogc-card-name{font-size:15px;font-weight:700;color:#3a3f51}
+.ogc-card-id{font-family:monospace;font-size:11px;color:#8a8f9c}
+.ogc-badge{font-size:10px;padding:2px 8px;border-radius:9px;white-space:nowrap}
+.ogc-b-ok{background:#e3f3d6;color:#4b8a2a}
+.ogc-b-upd{background:#fcf3d7;color:#8a6d3b}
+.ogc-b-mut{background:#eceef2;color:#6b7188}
+.ogc-b-run{background:#dff0f7;color:#31708f}
+.ogc-b-err{background:#f7dede;color:#a94442}
+.ogc-card-actions{display:flex;gap:6px}
+
+/* offline-cache note above the grid */
+.ogc-srcnote{background:#fcf3d7;border:1px solid #f0d9a8;color:#8a6d3b;font-size:12px;padding:6px 12px;border-radius:2px;margin-bottom:14px;max-width:560px}
+
+/* compact empty state */
+.ogc-empty{display:flex;align-items:center;gap:14px;background:#fff;border:1px dashed #d5d8de;border-radius:3px;padding:16px 18px;color:#6e7687;max-width:560px}
+.ogc-empty .fa{font-size:28px;color:#9aa0b4}
+.ogc-empty b{display:block;color:#3a3f51;margin-bottom:2px}
+
+/* ===== model pick screen (home when no model is selected) ===== */
+.osy-pickwrap{max-width:960px;margin:26px auto 0}
+.osy-pickwrap h1{font-size:26px;font-weight:400;color:#3a3f51;margin-bottom:4px}
+.osy-picksub{color:#8a8f9c;font-size:13px;margin-bottom:20px}
+.osy-pickcards{display:flex;gap:18px;flex-wrap:wrap}
+.osy-pickcard{flex:1 1 340px;background:#fff;border:1px solid #e4e4e4;border-radius:3px;padding:20px;border-top:3px solid var(--osy-slate)}
+.osy-pickcard.osy-og{border-top-color:var(--osy-og)}
+.osy-pickcard.osy-clews{border-top-color:var(--osy-clews)}
+.osy-pickcard h3{font-size:17px;margin:0 0 2px;color:#3a3f51}
+.osy-pickcard .osy-cardsub{color:#8a8f9c;font-size:12px;margin-bottom:10px}
+.osy-pickcard p{font-size:12px;color:#555;margin-bottom:14px}
+.osy-pickcard .btn .fa{margin-left:6px}
+.osy-btn-og{background:var(--osy-og);border-color:var(--osy-og-dark);color:#fff}
+.osy-btn-og:hover{background:var(--osy-og-dark);color:#fff}
+.osy-btn-clews{background:var(--osy-clews);border-color:var(--osy-clews-dark);color:#fff}
+.osy-btn-clews:hover{background:var(--osy-clews-dark);color:#fff}
