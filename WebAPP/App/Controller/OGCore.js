@@ -22,20 +22,13 @@ const BADGES = {
 const POLL_MS = 3500;
 // running jobs by country_id: { installId, timer }
 let POLLS = {};
-//job ids by country, persisted so a reload can resume the live view
-const JOBS_KEY = 'osy-ogc-jobs';
-function loadJobs(){
-    try { return JSON.parse(localStorage.getItem(JOBS_KEY)) || {}; }
-    catch (e) { return {}; }
-}
-function saveJob(countryId, installId){
-    let jobs = loadJobs();
-    if (installId){ jobs[countryId] = installId; } else { delete jobs[countryId]; }
-    localStorage.setItem(JOBS_KEY, JSON.stringify(jobs));
-}
-let LAST_JOB = loadJobs();
+//response ids are a same-page fallback; the backend registry is authoritative
+//across reloads and clients
+let JOB_IDS = {};
+//remove job ids persisted by older versions; source payloads below remain useful
+try { localStorage.removeItem('osy-ogc-jobs'); } catch (e) {}
 //add-dialog payloads by country, kept until the install succeeds; a failed
-//custom install has no registry record yet, this is its only retry source
+//custom install's minimal registry record does not retain its original source
 const PENDING_KEY = 'osy-ogc-pending-adds';
 function loadPendingAdds(){
     try { return JSON.parse(localStorage.getItem(PENDING_KEY)) || {}; }
@@ -55,8 +48,7 @@ let LOG_COUNTRY = null;
 // older visit must not repaint or restart polling on the new page
 let PAGE_ID = 0;
 
-// last known job state by country; running and failed jobs have no registry
-// record, so this is the dialog's only honest source (B3)
+//last known job state by country, used to keep the live dialog current
 let JOB_STATE = {};
 
 export default class OGCore {
@@ -79,8 +71,7 @@ export default class OGCore {
         OGCore.pageID = PAGE_ID;
         OGCore.stopAllPolls();
         LOG_COUNTRY = null;
-        //per-visit cache only; resumeJobs() rebuilds it from the persisted install
-        //ids on the next visit, so never carry state from a page that is gone
+        //the next visit rebuilds live state from the backend registry
         JOB_STATE = {};
     }
 
@@ -95,7 +86,6 @@ export default class OGCore {
             let model = new Model(catalog.countries, catalog.catalog_source, installed.calibrations);
             OGCore.model = model;
             OGCore.renderGrid(model, pageID);
-            OGCore.resumeJobs(pageID);
             OGCore.autoCheckUpdates(model, pageID);
             if (initEvents){
                 OGCore.initEvents();
@@ -120,8 +110,7 @@ export default class OGCore {
             return;
         }
         $('#ogcGrid').empty();
-        //adds that never succeeded have no catalogue or registry entry; their
-        //cards come from the saved payloads so the job and retry stay reachable
+        //saved adds missing from the current backend lists still need a retry card
         let pendingAdds = {};
         $.each(loadPendingAdds(), function (countryId, p) {
             if (!OGCore.findCalibration(countryId)){
@@ -145,17 +134,17 @@ export default class OGCore {
         $.each(model.calibrations, function (id, c) {
             $('#ogcGrid').append(OGCore.cardHtml(c, model.records[c.country_id]));
             if (c.install_state == 'installing' || c.install_state == 'checking'){
-                // a job is running, possibly started before a reload; resume the
-                // live poll if its id was persisted, else watch the catalogue
-                if (LAST_JOB[c.country_id]){
-                    OGCore.pollJob(c.country_id, LAST_JOB[c.country_id], pageID);
+                //the registry carries the id, so any client can resume the live job
+                let installId = OGCore.jobIdFor(c.country_id);
+                if (installId){
+                    OGCore.pollJob(c.country_id, installId, pageID);
                 }else{
                     OGCore.watchCountry(c.country_id, pageID);
                 }
             }
         });
         $.each(pendingAdds, function (countryId, p) {
-            //failed until a live job says otherwise (resumeJobs repaints)
+            //failed until a live job says otherwise
             $('#ogcGrid').append(OGCore.cardHtml({
                 country_id: countryId, country_name: p.country_name, install_state: 'failed'
             }));
@@ -203,7 +192,10 @@ export default class OGCore {
                     </button>`;
         }
         if (state == 'installed'){
-            return `<button class="btn ogc-btn ogc-btn-ico" data-act="check" title="Check for updates"><i class="fa fa-refresh"></i></button>
+            return `${record && record.last_error
+                        ? '<button class="btn ogc-btn ogc-btn-danger" data-act="log"><i class="fa fa-exclamation-triangle"></i> View update error</button>'
+                        : ''}
+                    <button class="btn ogc-btn ogc-btn-ico" data-act="check" title="Check for updates"><i class="fa fa-refresh"></i></button>
                     <button class="btn ogc-btn ogc-btn-ico" data-act="remove" title="Remove from MUIOGO"><i class="fa fa-times"></i></button>`;
         }
         if (state == 'update_available'){
@@ -246,8 +238,7 @@ export default class OGCore {
         });
     }
 
-    //repaint one card in place; running and failed jobs have no registry
-    //record yet, so the catalogue cannot render them
+    //repaint one card in place while waiting for the next registry refresh
     static setCardState(countryId, state){
         let card = $(`#ogcGrid .ogc-card[data-country="${countryId}"]`);
         let badge = BADGES[state] || ['ogc-b-mut', state];
@@ -286,8 +277,7 @@ export default class OGCore {
             });
         };
         POLLS[countryId] = { installId: installId, timer: setInterval(tick, POLL_MS) };
-        LAST_JOB[countryId] = installId;
-        saveJob(countryId, installId);
+        JOB_IDS[countryId] = installId;
         //first status right away
         tick();
     }
@@ -303,7 +293,7 @@ export default class OGCore {
         }
         if (job.install_state == 'installed'){
             OGCore.stopPoll(countryId);
-            saveJob(countryId, null);
+            delete JOB_IDS[countryId];
             savePendingAdd(countryId, null);
             delete JOB_STATE[countryId];
             Message.smallBoxInfo('OG-Core', esc(job.country_name) + ' is installed.', 4000);
@@ -315,15 +305,24 @@ export default class OGCore {
         }
         if (job.install_state == 'failed'){
             OGCore.stopPoll(countryId);
+            let record = (OGCore.model && OGCore.model.records[countryId]) || null;
+            let workingInstall = record && record.venv_path;
             if (LOG_COUNTRY == countryId){
                 // the open dialog becomes the error view in place
                 $('#ogcModalHead').attr('class', 'ogc-box-head ogc-head-err')
-                    .html(`<i class="fa fa-exclamation-triangle"></i> ${esc(job.country_name)} (${esc(countryId)}): install failed`);
-                if (!$('#ogcModalFoot [data-act="retry-modal"]').length){
-                    $('#ogcModalFoot').append('<button class="btn ogc-btn ogc-btn-danger" data-act="retry-modal"><i class="fa fa-refresh"></i> Retry install</button>');
+                    .html(`<i class="fa fa-exclamation-triangle"></i> ${esc(job.country_name)} (${esc(countryId)}): ${workingInstall ? 'update' : 'install'} failed`);
+                let retryAct = workingInstall ? 'retry-update-modal' : 'retry-modal';
+                if (!$('#ogcModalFoot [data-act="' + retryAct + '"]').length){
+                    $('#ogcModalFoot').append(`<button class="btn ogc-btn ogc-btn-danger" data-act="${retryAct}"><i class="fa fa-refresh"></i> Retry ${workingInstall ? 'update' : 'install'}</button>`);
                 }
             }
-            //no refresh, the catalogue would repaint a failed card as not installed
+            if (workingInstall){
+                //a failed update does not invalidate the existing environment
+                record.last_error = job.error || 'Update failed.';
+                OGCore.setCardState(countryId, 'installed');
+                OGCore.refresh(false, pageID);
+                return;
+            }
             OGCore.setCardState(countryId, 'failed');
             return;
         }
@@ -350,41 +349,7 @@ export default class OGCore {
         });
     }
 
-    //jobs started before this page load are invisible to the catalogue,
-    //ask each persisted job id for its state and repaint the card
-    static resumeJobs(pageID){
-        if (!OGCore.isCurrent(pageID)){
-            return;
-        }
-        $.each(loadJobs(), function (countryId, installId) {
-            if (POLLS[countryId]){
-                return;
-            }
-            Ogc.getInstallStatus(installId)
-            .then(job => {
-                if (!OGCore.isCurrent(pageID)){
-                    return;
-                }
-                if (job.install_state == 'installing' || job.install_state == 'checking'){
-                    JOB_STATE[countryId] = job;
-                    OGCore.setCardBusy(countryId, job.progress_label);
-                    OGCore.pollJob(countryId, installId, pageID);
-                }else if (job.install_state == 'failed'){
-                    //keep the id so the log dialog can refetch it, remember the
-                    //state so a repaint does not resurrect the card
-                    JOB_STATE[countryId] = job;
-                    OGCore.setCardState(countryId, 'failed');
-                }else{
-                        //finished fine, the registry already reflects it
-                    saveJob(countryId, null);
-                }
-            })
-            .catch(e => {});
-        });
-    }
-
-    //fallback when a running job's id is unknown: watch the catalogue until
-    //the state changes, at a wider interval since each call hits the register
+    //fallback for an older backend or a best-effort registry write failure
     static watchCountry(countryId, pageID){
         if (!OGCore.isCurrent(pageID) || POLLS[countryId]){
             return;
@@ -443,18 +408,21 @@ export default class OGCore {
 
     static openLog(countryId, starting){
         let c = OGCore.findCalibration(countryId);
+        let record = (OGCore.model && OGCore.model.records[countryId]) || null;
         let lastJob = JOB_STATE[countryId];
         let failed = !starting && lastJob
             ? lastJob.install_state == 'failed'
-            : !starting && c && c.install_state == 'failed';
+            : !starting && ((c && c.install_state == 'failed') || (record && record.last_error));
+        let updateFailed = failed && record && record.venv_path;
         LOG_COUNTRY = countryId;
         let countryName = (lastJob && lastJob.country_name) || (c && c.country_name) || countryId;
         let head = failed
-            ? `<i class="fa fa-exclamation-triangle"></i> ${esc(countryName)} (${esc(countryId)}): install failed`
+            ? `<i class="fa fa-exclamation-triangle"></i> ${esc(countryName)} (${esc(countryId)}): ${updateFailed ? 'update' : 'install'} failed`
             : `<i class="fa fa-circle-o-notch fa-spin"></i> Installing ${esc(countryName)}`;
+        let retryAct = updateFailed ? 'retry-update-modal' : 'retry-modal';
         let foot = `<button class="btn ogc-btn ogc-btn-line" data-act="copylog"><i class="fa fa-clipboard"></i> Copy log</button>
                     <button class="btn ogc-btn ogc-btn-line" data-act="close">Close</button>
-                    ${failed ? '<button class="btn ogc-btn ogc-btn-danger" data-act="retry-modal"><i class="fa fa-refresh"></i> Retry install</button>' : ''}`;
+                    ${failed ? `<button class="btn ogc-btn ogc-btn-danger" data-act="${retryAct}"><i class="fa fa-refresh"></i> Retry ${updateFailed ? 'update' : 'install'}</button>` : ''}`;
         OGCore.openModal(head, `<div class="ogc-logsum" id="ogcLogSum"></div><div class="ogc-log" id="ogcLog"></div>`, foot, failed ? 'ogc-head-err' : '');
         $('#ogcModal').attr('data-country', countryId);
         if (starting){
@@ -463,8 +431,7 @@ export default class OGCore {
             return;
         }
         //what the job has logged so far, live updates come from the poll
-        let poll = POLLS[countryId];
-        let installId = (poll && poll.installId) || LAST_JOB[countryId];
+        let installId = OGCore.jobIdFor(countryId);
         if (installId){
             let pageID = PAGE_ID;
             Ogc.getInstallStatus(installId)
@@ -650,6 +617,17 @@ export default class OGCore {
         return found;
     }
 
+    static jobIdFor(countryId){
+        let poll = POLLS[countryId];
+        let record = (OGCore.model && OGCore.model.records[countryId]) || null;
+        let calibration = OGCore.model && OGCore.findCalibration(countryId);
+        return (poll && poll.installId)
+            || (record && record.install_id)
+            || (calibration && calibration.install_id)
+            || JOB_IDS[countryId]
+            || null;
+    }
+
     static install(countryId){
         let c = OGCore.findCalibration(countryId);
         if (c && c.catalog_key){
@@ -658,8 +636,8 @@ export default class OGCore {
             }));
             return;
         }
-        // custom calibration: an unfinished add is the latest source, else the
-        // registry record from a previous success
+        //custom calibration: an unfinished add is the latest source, otherwise
+        //retry from a complete registry record
         let pending = loadPendingAdd(countryId);
         if (pending){
             OGCore.startFromPayload(pending);
@@ -720,10 +698,10 @@ export default class OGCore {
     static removeConfirm(countryId){
         let pageID = PAGE_ID;
         OGCore.closeModal();
-        // a pending add that never succeeded has no registry record to remove
+        //fallback for a pending add missing from the backend registry
         if (!OGCore.model.records[countryId]){
             savePendingAdd(countryId, null);
-            saveJob(countryId, null);
+            delete JOB_IDS[countryId];
             delete JOB_STATE[countryId];
             OGCore.refresh(false, pageID);
             return;
@@ -731,6 +709,7 @@ export default class OGCore {
         Ogc.unregisterCalibration(countryId)
         .then(response => {
             savePendingAdd(countryId, null);
+            delete JOB_IDS[countryId];
             delete JOB_STATE[countryId];
             Message.smallBoxInfo('OG-Core', 'Calibration removed.', 3000);
             if (OGCore.isCurrent(pageID)){
@@ -781,6 +760,10 @@ export default class OGCore {
             if (act == 'retry-modal'){
                 OGCore.closeModal();
                 OGCore.install(countryId);
+            }
+            if (act == 'retry-update-modal'){
+                OGCore.closeModal();
+                OGCore.update(countryId);
             }
             if (act == 'remove-confirm') OGCore.removeConfirm(countryId);
             if (act == 'add-check') OGCore.addCheck();

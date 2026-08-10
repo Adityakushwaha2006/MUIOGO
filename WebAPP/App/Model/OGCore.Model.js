@@ -16,6 +16,7 @@ export class Model {
                     catalog_key: null,
                     repo_url: r.repo_url || '',
                     install_state: r.install_state || 'installed',
+                    install_id: r.install_id || null,
                     is_base: false,
                     custom: true
                 });

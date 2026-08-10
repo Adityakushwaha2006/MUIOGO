@@ -155,6 +155,64 @@ def test_failed_job_reopens_with_retry_action(page, base_url):
     assert result['retry'] == 1
 
 
+def test_registry_install_id_is_authoritative(page, base_url):
+    page.goto(f"{base_url}/#/OGCore")
+    expect(page.locator(".ogc-page")).to_be_visible()
+    result = page.evaluate("""async () => {
+        const { default: OGCore } = await import(new URL('App/Controller/OGCore.js', location.href).href);
+        localStorage.setItem('osy-ogc-jobs', JSON.stringify({ KEN: 'stale-browser-id' }));
+        OGCore.model = {
+            calibrations: [{ country_id: 'KEN', install_id: 'catalog-id' }],
+            records: { KEN: { install_id: 'registry-id' } },
+        };
+        return OGCore.jobIdFor('KEN');
+    }""")
+    assert result == 'registry-id'
+
+
+def test_failed_update_keeps_working_install(page, base_url):
+    page.goto(f"{base_url}/#/OGCore")
+    expect(page.locator(".ogc-page")).to_be_visible()
+    result = page.evaluate("""async () => {
+        const { default: OGCore } = await import(new URL('App/Controller/OGCore.js', location.href).href);
+        OGCore.model = {
+            calibrations: [{
+                country_id: 'KEN', country_name: 'Kenya', install_state: 'installing'
+            }],
+            records: { KEN: {
+                country_id: 'KEN', country_name: 'Kenya', install_state: 'installing',
+                install_id: 'install_ken', venv_path: '/models/OG-KEN/.venv'
+            } },
+        };
+        $('#ogcGrid').html(OGCore.cardHtml(
+            OGCore.model.calibrations[0], OGCore.model.records.KEN
+        ));
+        OGCore.openLog('KEN', true);
+        let refreshed = false;
+        OGCore.refresh = () => { refreshed = true; };
+        OGCore.applyJob('KEN', {
+            country_id: 'KEN', country_name: 'Kenya', install_state: 'failed',
+            log_tail: ['update failed'], error: 'update failed'
+        }, OGCore.pageID);
+        return {
+            badge: $('#ogcGrid .ogc-badge').text(),
+            action: $('#ogcGrid [data-act="log"]').text(),
+            heading: $('#ogcModalHead').text(),
+            retryUpdate: $('#ogcModalFoot [data-act="retry-update-modal"]').length,
+            retryInstall: $('#ogcModalFoot [data-act="retry-modal"]').length,
+            lastError: OGCore.model.records.KEN.last_error,
+            refreshed,
+        };
+    }""")
+    assert result['badge'] == 'installed'
+    assert 'View update error' in result['action']
+    assert 'update failed' in result['heading']
+    assert result['retryUpdate'] == 1
+    assert result['retryInstall'] == 0
+    assert result['lastError'] == 'update failed'
+    assert result['refreshed'] is True
+
+
 def test_navigation_invalidates_old_og_page_load(page, base_url):
     page.goto(f"{base_url}/#/OGCore")
     expect(page.locator(".ogc-page")).to_be_visible()
