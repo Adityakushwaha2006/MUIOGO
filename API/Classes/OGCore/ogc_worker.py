@@ -513,9 +513,16 @@ def _dir_ss(dir_path: Path, kind: str):
 
 
 def _dir_tpi(dir_path: Path, kind: str):
-    return _load_pickle(
-        Path(dir_path) / "TPI" / "TPI_vars.pkl", f"{kind} transition-path results"
-    )
+    # A missing transition path is the one of these a caller can do something about,
+    # so say what to do instead of naming a file inside the run directory.
+    path = Path(dir_path) / "TPI" / "TPI_vars.pkl"
+    if not path.is_file():
+        raise WorkerError(
+            f"No transition path results for the {kind.lower()} run - run it with "
+            "the full time path first.",
+            2,
+        )
+    return _load_pickle(path, f"{kind} transition-path results")
 
 
 def _dir_params(dir_path: Path, kind: str):

@@ -50,7 +50,7 @@ TABLES = {
     # than returning model-only rows. The worker already accepts the option; pass it
     # through here so a caller can actually reach it.
     "wealth_moments": ("wealth_moments", False, ("data_moments",)),
-    "time_series": ("time_series", False, ()),
+    "time_series": ("time_series", False, ("stationarized",)),
     "revenue_decomp": (
         "revenue_decomp",
         True,
