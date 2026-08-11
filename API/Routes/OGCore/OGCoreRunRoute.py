@@ -1081,6 +1081,7 @@ def restoreCase():
 
     fd, tmp_path = tempfile.mkstemp(suffix=".zip")
     os.close(fd)
+    staging = None
     try:
         upload.save(tmp_path)
         try:
@@ -1120,17 +1121,44 @@ def restoreCase():
             if total > _MAX_BACKUP_UNPACKED_BYTES:
                 return _err("The backup expands to too much data.", http=413)
 
-            # Extract each file member by hand (not extractall) so nothing lands
-            # outside target_dir even if a member survived the checks above.
+            # Unpack into a staging directory and publish it with a single rename,
+            # so a restore that stops partway (a full disk, a name the filesystem
+            # refuses) leaves nothing behind. Extracting straight into the case
+            # directory would leave a half-restored case, and that wreckage would
+            # then block the retry, because the name already exists.
+            #
+            # Staging sits beside the cases directory rather than inside it: same
+            # filesystem, so publishing stays a rename rather than a copy, while a
+            # restore in flight never shows up in the case list (list_cases treats
+            # any directory holding a genData.json as a case).
             Config.OGC_CASES_DIR.mkdir(parents=True, exist_ok=True)
+            staging_root = Config.OGC_CASES_DIR.parent / "restore_tmp"
+            staging_root.mkdir(parents=True, exist_ok=True)
+            staging = Path(tempfile.mkdtemp(dir=staging_root))
+
+            # Extract each file member by hand (not extractall) so nothing lands
+            # outside the staging dir even if a member survived the checks above.
             for info in zf.infolist():
                 if info.is_dir():
                     continue
                 rel = info.filename.replace("\\", "/")
-                dest = target_dir.joinpath(*rel.split("/"))
+                dest = staging.joinpath(*rel.split("/"))
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as src, open(dest, "wb") as out:
                     shutil.copyfileobj(src, out)
+
+            try:
+                os.replace(staging, target_dir)
+            except OSError:
+                # The case may have appeared while this request was unpacking; the
+                # existence check above is not a lock. Either way nothing was
+                # published, so the staging copy is dropped in the finally below.
+                if target_dir.exists():
+                    return jsonify(
+                        {"message": "Case already exists.", "status_code": "exist"}
+                    ), 200
+                return _err("The case could not be restored.")
+            staging = None  # published; no longer ours to remove
 
         return jsonify(
             {"message": f"Case {target} restored.", "status_code": "success"}
@@ -1140,3 +1168,5 @@ def restoreCase():
             os.unlink(tmp_path)
         except OSError:
             pass
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
