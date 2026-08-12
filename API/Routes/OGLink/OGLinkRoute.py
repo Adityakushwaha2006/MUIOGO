@@ -12,7 +12,10 @@ from urllib.parse import urlparse
 
 from flask import Blueprint, jsonify, request
 
+from Classes.Base import Config
+from Classes.Base.FileClass import File
 from Classes.OGLink.PatchApply import OGLinkPatch, OGLinkPatchError
+from Classes.OGLink.PostRunHook import PostRunHook
 
 oglink_api = Blueprint("OGLinkRoute", __name__, url_prefix="/oglink")
 
@@ -91,3 +94,98 @@ def applyPatch():
     result["status_code"] = "success"
     result["message"] = "Patch applied and solved."
     return jsonify(result), 200
+
+
+def _case_dir(casename):
+    """Validated case dir, or None (caller returns a 400/404)."""
+    if not casename:
+        return None
+    try:
+        Config.validate_path(Config.DATA_STORAGE, casename)
+    except PermissionError:
+        return None
+    path = Path(Config.DATA_STORAGE, casename)
+    return path if (path / "genData.json").is_file() else None
+
+
+@oglink_api.route("/status", methods=["GET"])
+def status():
+    """Is the ogclews-link installed and resolvable? The capability check the
+    UI reads before offering coupled-run actions."""
+    info = PostRunHook.status()
+    info["status_code"] = "success"
+    return jsonify(info), 200
+
+
+@oglink_api.route("/runs", methods=["GET"])
+def runs():
+    """The case's registered OG-link runs (the 'oglink-runs' key the post-run
+    hook maintains in view/resData.json)."""
+    case_dir = _case_dir(request.args.get("case"))
+    if case_dir is None:
+        return _err("Pass a valid ?case=<name>.", http=404)
+    res_data_path = case_dir / "view" / "resData.json"
+    res_data = File.readFile(res_data_path) if res_data_path.is_file() else {}
+    return jsonify({"status_code": "success",
+                    "runs": res_data.get("oglink-runs", [])}), 200
+
+
+# hook.json fields a POST may set, with their type checks.
+_HOOK_FIELDS = {
+    "enabled": lambda v: isinstance(v, bool),
+    "experiment": lambda v: isinstance(v, str) and v.strip(),
+    "base_caserun": lambda v: isinstance(v, str) and v.strip(),
+    "country": lambda v: v is None or (isinstance(v, str) and v.strip()),
+    "workers": lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0,
+    "timeout_s": lambda v: isinstance(v, int) and not isinstance(v, bool) and v > 0,
+    "out": lambda v: v is None or (isinstance(v, str) and "\x00" not in v),
+    "extra_args": lambda v: isinstance(v, list) and all(isinstance(a, str) for a in v),
+}
+
+
+@oglink_api.route("/hookConfig", methods=["GET", "POST"])
+def hookConfig():
+    """Read or write a case's <case>/oglink/hook.json (the post-run hook's
+    opt-in config), so the UI never hand-edits files."""
+    if request.method == "GET":
+        case_dir = _case_dir(request.args.get("case"))
+        if case_dir is None:
+            return _err("Pass a valid ?case=<name>.", http=404)
+        cfg_path = case_dir / "oglink" / "hook.json"
+        if not cfg_path.is_file():
+            return jsonify({"status_code": "success", "configured": False,
+                            "config": None}), 200
+        return jsonify({"status_code": "success", "configured": True,
+                        "config": File.readFile(cfg_path)}), 200
+
+    blocked = _blocked_cross_site()
+    if blocked:
+        return blocked
+    data = request.get_json(silent=True)
+    if data is None:
+        return _err("Request body must be valid JSON.")
+    case_dir = _case_dir(data.get("case"))
+    if case_dir is None:
+        return _err("Missing or unknown 'case'.", http=404)
+    config = data.get("config")
+    if not isinstance(config, dict):
+        return _err("Missing required field: config (an object).")
+    unknown = sorted(set(config) - set(_HOOK_FIELDS))
+    if unknown:
+        return _err(f"Unknown config fields: {unknown}. "
+                    f"Allowed: {sorted(_HOOK_FIELDS)}")
+    for field, valid in _HOOK_FIELDS.items():
+        if field in config and not valid(config[field]):
+            return _err(f"Config field {field!r} has an invalid value.")
+    for required in ("experiment", "base_caserun"):
+        if not config.get(required):
+            return _err(f"Config must set {required!r}.")
+    (case_dir / "oglink").mkdir(exist_ok=True)
+    File.writeFile(config, case_dir / "oglink" / "hook.json")
+    warnings = []
+    if not (case_dir / "res" / config["base_caserun"] / "csv").is_dir():
+        warnings.append(f"base caserun {config['base_caserun']!r} has no solved "
+                        "results yet; the hook will skip until it is solved")
+    return jsonify({"status_code": "success", "configured": True,
+                    "config": config, "warnings": warnings,
+                    "message": "Hook configured."}), 200

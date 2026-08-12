@@ -103,6 +103,15 @@ OGC_MODELS_DIR = Path(
     or (Path.home() / ".muiogo" / "og-models")
 )
 
+# OG-CLEWS link run outputs (manifests, macro tables, decks, the link's OG
+# baseline cache). Same rule as OG state: under ~/.muiogo, never inside the
+# CLEWS DataStorage tree -- these can be hundreds of MB and must not ride
+# along in case zips or case copies.
+OGLINK_RUNS_DIR = Path(
+    os.environ.get("MUIOGO_OGLINK_RUNS_DIR", "").strip()
+    or (Path.home() / ".muiogo" / "oglink-runs")
+)
+
 # Where the installer's machine-readable catalogue and scripts are fetched from.
 # Env overrides let tests/offline runs point at a local mirror.
 _OGC_INSTALLER_RAW_BASE = (
