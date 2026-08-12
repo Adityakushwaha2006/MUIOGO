@@ -214,25 +214,50 @@ class OGLinkPatch:
 
     # ── helpers ───────────────────────────────────────────────────────────────
     @staticmethod
+    def validate_name(name, what):
+        """A case-copy or caserun name must be a single path segment inside
+        DataStorage: no separators, no traversal, no null bytes."""
+        Config.validate_path(Config.DATA_STORAGE, name)
+        if Path(name).name != name or name in (".", ".."):
+            raise OGLinkPatchError(
+                f"{what} {name!r} must be a plain name (no path separators)")
+
+    @staticmethod
     def copy_case(src_case, dst_case, overwrite=False):
         Config.validate_path(Config.DATA_STORAGE, src_case)
-        Config.validate_path(Config.DATA_STORAGE, dst_case)
         src = Path(Config.DATA_STORAGE, src_case)
         dst = Path(Config.DATA_STORAGE, dst_case)
         if not (src / "genData.json").is_file():
             raise OGLinkPatchError(
                 f"{src_case!r} is not a case (no genData.json)", http=404)
+        if dst.resolve() == src.resolve():
+            raise OGLinkPatchError(
+                f"copy name {dst_case!r} is the source case itself; a patch "
+                "never lands in a live case", http=409)
         if dst.exists():
+            # Overwrite may only ever delete a dir THIS module created: the
+            # birth marker is written the moment a copy is made. Anything
+            # else (a live case, a hand-made dir) is refused, overwrite or not.
             if not overwrite:
                 raise OGLinkPatchError(
                     f"case copy {dst_case!r} already exists; pass "
                     "overwrite_copy to replace it", http=409)
+            if not (dst / "oglink" / "created.json").is_file():
+                raise OGLinkPatchError(
+                    f"{dst_case!r} exists but is not an OG-link copy (no "
+                    "oglink/created.json marker); refusing to overwrite it",
+                    http=409)
             shutil.rmtree(dst)
         shutil.copytree(src, dst)
         gd_path = dst / "genData.json"
         gen_data = File.readFile(gd_path)
         gen_data["osy-casename"] = dst_case
         File.writeFile(gen_data, gd_path)
+        (dst / "oglink").mkdir(exist_ok=True)
+        File.writeFile(
+            {"copied_from": src_case,
+             "created_at": datetime.now(timezone.utc).isoformat()},
+            dst / "oglink" / "created.json")
         return dst
 
     @staticmethod
@@ -276,7 +301,8 @@ class OGLinkPatch:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         copy_name = copy_name or f"{case}_oglink_{stamp}"
         caserun_name = caserun_name or f"OGLink_{base_caserun}"
-        Config.validate_path(Config.DATA_STORAGE, copy_name)
+        cls.validate_name(copy_name, "copy name")
+        cls.validate_name(caserun_name, "caserun name")
 
         copy_dir = cls.copy_case(case, copy_name, overwrite=overwrite_copy)
         try:
