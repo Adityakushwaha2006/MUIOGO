@@ -111,8 +111,11 @@ def _case_dir(casename):
 @oglink_api.route("/status", methods=["GET"])
 def status():
     """Is the ogclews-link installed and resolvable? The capability check the
-    UI reads before offering coupled-run actions."""
+    UI reads before offering coupled-run actions. ?deep=1 additionally asks
+    the link which OG models it has registered (a subprocess, ~seconds)."""
     info = PostRunHook.status()
+    if info["installed"] and request.args.get("deep") in ("1", "true"):
+        info.update(PostRunHook.models_check(info["python"], info["home"]))
     info["status_code"] = "success"
     return jsonify(info), 200
 

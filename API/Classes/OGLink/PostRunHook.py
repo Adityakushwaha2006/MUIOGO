@@ -45,22 +45,24 @@ class PostRunHook:
     # ── environment resolution (explicit, no PATH guessing) ──────────────────
     @staticmethod
     def link_python():
-        """The link's own interpreter: $OGCLEWS_LINK_PYTHON > $OGCLEWS_LINK_HOME's
-        venv > the ../ogclews-link sibling of this MUIOGO checkout. None if the
-        link is not installed (the hook then no-ops)."""
+        """The link's own interpreter, probed in order: $OGCLEWS_LINK_PYTHON >
+        $OGCLEWS_LINK_HOME's venv > the installer location
+        (~/.muiogo/ogclews-link, like og-models) > the ../ogclews-link sibling
+        of this MUIOGO checkout (dev layout). None if the link is not
+        installed (the hook then no-ops)."""
         explicit = os.environ.get("OGCLEWS_LINK_PYTHON")
         if explicit:
             return explicit if Path(explicit).is_file() else None
         homes = []
         if os.environ.get("OGCLEWS_LINK_HOME"):
             homes.append(Path(os.environ["OGCLEWS_LINK_HOME"]))
+        homes.append(Config.OGLINK_HOME_DIR)
         muiogo_root = Path(Config.DATA_STORAGE).resolve().parent.parent
         homes.append(muiogo_root.parent / "ogclews-link")
         for home in homes:
-            for rel in ("bin/python", "Scripts/python.exe"):
-                candidate = home / ".venv" / rel
-                if candidate.is_file():
-                    return str(candidate)
+            candidate = Config.venv_python_path(home / ".venv")
+            if candidate.is_file():
+                return str(candidate)
         return None
 
     @staticmethod
@@ -86,14 +88,31 @@ class PostRunHook:
         python = cls.link_python()
         if python is None:
             return {"installed": False, "python": None, "home": None,
-                    "reason": "no $OGCLEWS_LINK_PYTHON, $OGCLEWS_LINK_HOME, "
-                              "or ../ogclews-link sibling venv"}
+                    "reason": "ogclews-link not found: no $OGCLEWS_LINK_PYTHON "
+                              "or $OGCLEWS_LINK_HOME, and no venv at "
+                              f"{Config.OGLINK_HOME_DIR} or ../ogclews-link"}
         home = cls.link_home(python)
         if home is None:
             return {"installed": False, "python": python, "home": None,
                     "reason": "interpreter is not inside a .venv; set "
                               "$OGCLEWS_LINK_HOME to the link checkout"}
         return {"installed": True, "python": python, "home": home, "reason": None}
+
+    @classmethod
+    def models_check(cls, python, home):
+        """Ask the installed link which OG models it has registered -- the
+        second half of the capability check (a link with no registered model
+        cannot run a coupled experiment)."""
+        try:
+            out = subprocess.run([python, "-m", "ogclews_link", "models", "list"],
+                                 cwd=home, capture_output=True, text=True,
+                                 timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return {"models_registered": False,
+                    "models_output": f"{type(exc).__name__}: {exc}"}
+        ok = out.returncode == 0
+        return {"models_registered": bool(ok and "[x]" in out.stdout),
+                "models_output": (out.stdout if ok else out.stderr).strip()[-1000:]}
 
     # ── the hook ──────────────────────────────────────────────────────────────
     @classmethod
@@ -138,8 +157,9 @@ class PostRunHook:
                         f"{base_caserun!r} first")
         python = cls.link_python()
         if python is None:
-            return skip("ogclews-link is not installed (no $OGCLEWS_LINK_PYTHON, "
-                        "$OGCLEWS_LINK_HOME, or ../ogclews-link sibling venv)")
+            return skip("ogclews-link is not installed (no $OGCLEWS_LINK_PYTHON "
+                        f"or $OGCLEWS_LINK_HOME, and no venv at "
+                        f"{Config.OGLINK_HOME_DIR} or ../ogclews-link)")
         home = cls.link_home(python)
         if home is None:
             return skip("cannot derive the link checkout from the interpreter; "
@@ -162,9 +182,11 @@ class PostRunHook:
         timeout = int(cfg.get("timeout_s", 21600))
         started = datetime.now(timezone.utc)
         logger.info("oglink hook: running %s", " ".join(cmd))
-        # Own process group + kill the group on timeout: the link spawns the OG
-        # solver as a grandchild, which a plain timeout-kill would orphan (the
-        # same lesson clews_driver.run_caserun learned live).
+        # Own process group + kill the WHOLE TREE on timeout: the link spawns
+        # the OG solver as a grandchild, which a plain timeout-kill would
+        # orphan (the same lesson clews_driver.run_caserun learned live).
+        # start_new_session is POSIX-only (silently ignored on Windows, where
+        # taskkill /T kills the tree by pid instead).
         proc = subprocess.Popen(cmd, cwd=home,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, start_new_session=True)
@@ -172,12 +194,8 @@ class PostRunHook:
             out, err = proc.communicate(timeout=timeout)
             status = "success" if proc.returncode == 0 else "failed"
         except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(proc.pid), 15)
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(os.getpgid(proc.pid), 9)
-            out, err = "", f"timed out after {timeout}s; process group killed"
+            cls._kill_tree(proc)
+            out, err = "", f"timed out after {timeout}s; process tree killed"
             status = "timeout"
 
         run_dir = Path(out_dir) / experiment
@@ -209,6 +227,21 @@ class PostRunHook:
         if status != "success":
             summary["stderr_tail"] = entry["stderr_tail"][-400:]
         return summary
+
+    @staticmethod
+    def _kill_tree(proc):
+        """Terminate the subprocess AND its descendants, on both platforms.
+        POSIX: signal the process group (we started a new session). Windows:
+        os.killpg does not exist; taskkill /T walks the tree by pid."""
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True)
+            return
+        os.killpg(os.getpgid(proc.pid), 15)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(proc.pid), 9)
 
     # ── registration (the same read-merge-write idiom as /updateData) ─────────
     @staticmethod
