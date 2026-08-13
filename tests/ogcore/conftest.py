@@ -85,7 +85,7 @@ def calibration(tmp_path):
 def make_case():
     """Build a case, optionally with runs. Returns a factory."""
     def _make(casename="c1", country_id="ETH", runs=()):
-        case = OGCoreCase(casename)
+        case = OGCoreCase(country_id, casename)
         case.create_case({"ogc-casename": casename, "country_id": country_id})
         for run_name, run_type, baseline in runs:
             case.create_run(run_name, run_type, baseline, {})
@@ -162,10 +162,11 @@ def stub_launch(monkeypatch):
     """
     launched = []
 
-    def fake_launch(cls, casename, run_name, time_path, python_path):
+    def fake_launch(cls, country_id, casename, run_name, time_path, python_path):
         launched.append((casename, run_name))
-        cls._active = {"casename": casename, "run_name": run_name,
-                      "runner": FakeRunner(), "thread": None, "cancelled": False}
+        cls._active = {"country_id": country_id, "casename": casename,
+                       "run_name": run_name, "runner": FakeRunner(),
+                       "thread": None, "cancelled": False}
 
     monkeypatch.setattr(RunJob, "_launch", classmethod(fake_launch))
     return launched
