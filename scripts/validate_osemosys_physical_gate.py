@@ -237,6 +237,66 @@ def evaluate_slice(
     }
 
 
+def evaluate_annual(
+    *,
+    year: str,
+    direct_demand: dict[str, float],
+    technologies: tuple[str, ...],
+    routes_by_output: dict[str, list[tuple[str, Any, float]]],
+    inputs_by_route: dict[tuple[str, Any], dict[str, float]],
+    activity_ceiling: dict[str, float],
+    tech_name: dict[str, str],
+    commodity_name: dict[str, str],
+) -> dict[str, Any]:
+    """Evaluate the annual EBb4 envelope for AccumulatedAnnualDemand.
+
+    The recursive commodity calculation is identical to the timeslice screen,
+    but its values are annual activities rather than rates.  Keeping this as a
+    distinct result prevents an annual demand from being assigned an invented
+    timeslice profile.
+    """
+    result = evaluate_slice(
+        year=year,
+        timeslice="ANNUAL",
+        year_split=1.0,
+        direct_demand=direct_demand,
+        technologies=technologies,
+        routes_by_output=routes_by_output,
+        inputs_by_route=inputs_by_route,
+        activity_ceiling=activity_ceiling,
+        tech_name=tech_name,
+        commodity_name=commodity_name,
+    )
+    result.pop("timeslice", None)
+    result.pop("year_split", None)
+    result["period"] = "annual"
+    for diagnostic in ([result["worst_commodity"]]
+                       if result["worst_commodity"] is not None else []):
+        diagnostic["required_annual_activity"] = diagnostic.pop("required_rate")
+        diagnostic["optimistic_production_upper_annual_activity"] = diagnostic.pop(
+            "optimistic_production_upper_rate"
+        )
+        diagnostic["headroom_annual_activity"] = diagnostic.pop("headroom_rate")
+    for failure in result["failures"]:
+        if failure.get("kind") == "commodity_timeslice_shortfall":
+            failure["kind"] = "commodity_annual_shortfall"
+        failure.pop("timeslice", None)
+        if "required_rate" in failure:
+            failure["required_annual_activity"] = failure.pop("required_rate")
+        if "optimistic_production_upper_rate" in failure:
+            failure["optimistic_production_upper_annual_activity"] = failure.pop(
+                "optimistic_production_upper_rate"
+            )
+        if "headroom_rate" in failure:
+            failure["headroom_annual_activity"] = failure.pop("headroom_rate")
+        for producer in failure.get("producers", []):
+            if "output_capacity_rate" in producer:
+                producer["output_capacity_annual_activity"] = producer.pop(
+                    "output_capacity_rate"
+                )
+    return result
+
+
 def validate_case(
     case: Path,
     *,
@@ -278,6 +338,7 @@ def validate_case(
     iar = scenario_rows(rytcm, "IAR", selected, base)
     oar = scenario_rows(rytcm, "OAR", selected, base)
     specified_demand = keyed(scenario_rows(ryc, "SAD", selected, base), "CommId")
+    accumulated_demand = keyed(scenario_rows(ryc, "AAD", selected, base), "CommId")
     demand_profile = keyed(scenario_rows(rycts, "SDP", selected, base), "CommId", "TsId")
     year_splits = keyed(scenario_rows(ryts, "YS", selected, base), "TsId")
     life = rt["OL"][base][0]
@@ -291,6 +352,7 @@ def validate_case(
         output_rows[(row["TechId"], row["MoId"], row["CommId"])] = row
 
     slice_results = []
+    annual_results = []
     all_failures = []
     for year in years:
         capacity = {
@@ -321,6 +383,43 @@ def validate_case(
             for tech in technologies
         }
 
+        routes_by_output: dict[str, list[tuple[str, Any, float]]] = defaultdict(list)
+        route_inputs: dict[tuple[str, Any], dict[str, float]] = defaultdict(dict)
+        for (tech, mode), rows in inputs_by_route.items():
+            route_inputs[(tech, mode)] = {
+                commodity: float(row[year]) for commodity, row in rows.items()
+            }
+        for (tech, mode, commodity), row in output_rows.items():
+            ratio = float(row[year])
+            if ratio > TOL:
+                routes_by_output[commodity].append((tech, mode, ratio))
+
+        annual_activity_ceiling = {
+            tech: min(
+                annual_envelope[tech],
+                capacity[tech] * float(cau[tech]) * weighted_cf[tech],
+                finite_limit(float(activity_limit[(tech,)][year])),
+            )
+            for tech in technologies
+        }
+        annual_demand = {
+            commodity: float(row[year])
+            for (commodity,), row in accumulated_demand.items()
+            if float(row[year]) > TOL
+        }
+        annual_result = evaluate_annual(
+            year=year,
+            direct_demand=annual_demand,
+            technologies=technologies,
+            routes_by_output=routes_by_output,
+            inputs_by_route=route_inputs,
+            activity_ceiling=annual_activity_ceiling,
+            tech_name=tech_name,
+            commodity_name=commodity_name,
+        )
+        annual_results.append(annual_result)
+        all_failures.extend(annual_result["failures"])
+
         for ts in timeslices:
             split = float(year_splits[(ts,)][year])
             if split <= 0:
@@ -331,17 +430,6 @@ def validate_case(
                 cab1 = annual_envelope[tech] / split
                 aac2 = finite_limit(float(activity_limit[(tech,)][year])) / split
                 activity_ceiling[tech] = min(caa4, cab1, aac2)
-
-            routes_by_output: dict[str, list[tuple[str, Any, float]]] = defaultdict(list)
-            route_inputs: dict[tuple[str, Any], dict[str, float]] = defaultdict(dict)
-            for (tech, mode), rows in inputs_by_route.items():
-                route_inputs[(tech, mode)] = {
-                    commodity: float(row[year]) for commodity, row in rows.items()
-                }
-            for (tech, mode, commodity), row in output_rows.items():
-                ratio = float(row[year])
-                if ratio > TOL:
-                    routes_by_output[commodity].append((tech, mode, ratio))
 
             direct_demand = {}
             for (commodity,), row in specified_demand.items():
@@ -385,13 +473,16 @@ def validate_case(
         "model_generation_runs": 0,
         "years_checked": len(years),
         "timeslices_checked": len(slice_results),
+        "annual_periods_checked": len(annual_results),
         "failure_count": len(all_failures),
         "failures": all_failures,
         "worst_slices": worst_slices,
+        "annual_results": annual_results,
         "limitations": [
             "A pass is not a proof of full-model feasibility.",
             "Shared producer capacity and route-mix coupling are relaxed optimistically.",
-            "AccumulatedAnnualDemand, storage, trade and user-defined constraints are not yet included.",
+            "Storage, trade and user-defined constraints are not yet included.",
+            "InputToNewCapacity and InputToTotalCapacity demands are relaxed optimistically.",
             "Historical-stock treatment requires an explicit --historical-through classification.",
         ],
     }
