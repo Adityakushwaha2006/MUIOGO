@@ -1758,15 +1758,22 @@ class DataFile(Osemosys):
             data_itnc = data['InputToNewCapacityRatio']
             data_ittc = data['InputToTotalCapacityRatio']
                             
-            data_out = list(set(data_out))
-            data_inp = list(set(data_inp))
-            data_all = list(set(data_all))
-            data_emi = list(set(data_emi))
-            data_emichange = list(set(data_emichange))
-            data_tts = list(set(data_tts))
-            data_tfs = list(set(data_tfs))
-            data_itnc = list(set(data_itnc))
-            data_ittc = list(set(data_ittc))
+            # Deterministic de-duplication: preserve first-seen order (the order the
+            # rows were parsed from the data file) instead of hash-set order.
+            # list(set(...)) reorders by hash, which Python randomizes per process
+            # (PYTHONHASHSEED) -> a differently ordered LP -> the solver returns a
+            # different (equally optimal, same-cost) solution on each run. dict.fromkeys
+            # keeps insertion order, so the LP and results are stable no matter how the
+            # run is launched (web UI, direct python, MUIOGO-AI over HTTP).
+            data_out = list(dict.fromkeys(data_out))
+            data_inp = list(dict.fromkeys(data_inp))
+            data_all = list(dict.fromkeys(data_all))
+            data_emi = list(dict.fromkeys(data_emi))
+            data_emichange = list(dict.fromkeys(data_emichange))
+            data_tts = list(dict.fromkeys(data_tts))
+            data_tfs = list(dict.fromkeys(data_tfs))
+            data_itnc = list(dict.fromkeys(data_itnc))
+            data_ittc = list(dict.fromkeys(data_ittc))
 
             dict_out = defaultdict(list)
             dict_inp = defaultdict(list)
@@ -2345,10 +2352,14 @@ class DataFile(Osemosys):
                 df['dual'] = df['dual'].astype(float).round(4)
 
                 #variables that are output form solver 19
-                params = df.parameter.unique()
                 all_params = {}
 
-                for each in params:
+                # Group the parsed solver output by parameter in a single pass.
+                # Was `for each in df.parameter.unique(): df[df.parameter==each]`,
+                # which rescanned every result row once per parameter (quadratic
+                # in parameter count). sort=False preserves first-appearance and
+                # within-group row order, so the emitted CSVs stay byte-identical.
+                for each, df_each in df.groupby('parameter', sort=False):
                     # Variable branch: pull setrelation from Variables.json via
                     # VAR_BY_NAME. Replaces the legacy Config.VARIABLES_C lookup.
                     # Anything the solver produces that is not in Variables.json
@@ -2356,7 +2367,7 @@ class DataFile(Osemosys):
                     # intentionally not exported — those CSVs had no consumers
                     # in MUIOGO and this matches MUIO 5.6's data-driven design.
                     if each in self.VAR_BY_NAME:
-                        df_p = df[df.parameter == each].copy()
+                        df_p = df_each.copy()
                         df_p[self.VAR_BY_NAME[each]["setrelation"]] = df_p['id'].str.split(',', expand=True)
 
                         result_cols = self.VAR_BY_NAME[each]["setrelation"].copy()
@@ -2372,7 +2383,7 @@ class DataFile(Osemosys):
                     # below so the dual values are scaled to the case discount
                     # rate before being written.
                     if each in self.DUALS_BY_NAME:
-                        df_p = df[df.parameter == each].copy()
+                        df_p = df_each.copy()
                         df_p[self.DUALS_BY_NAME[each]["setrelation"]] = df_p['id'].str.split(',', expand=True)
 
                         result_cols = self.DUALS_BY_NAME[each]["setrelation"].copy()
@@ -2615,355 +2626,109 @@ class DataFile(Osemosys):
             #CSV
             csvs = [f.name for f in os.scandir(csvFolderPath) ]
 
-            # Compose the by-name lookup from Variables ∪ Duals ∪ Indicators.
-            # Each entry carries 'id', 'group', and (now) 'setrelation' — the
-            # downstream group-handler branches below only read 'id' and
-            # 'group', so the extra key is harmless.
+            # Compose the by-name lookup from Variables, Duals and Indicators.
+            # Each entry carries 'id', 'group' and 'setrelation'; the pivot below
+            # only reads 'id' and 'group'.
             paramByName = { **self.VAR_BY_NAME, **self.DUALS_BY_NAME, **self.IND_BY_NAME }
 
-            DATA = {}
+            # Pivot layout per view group: ordered (label, source-column) pairs
+            # that become the leading columns of each emitted row; the remaining
+            # columns are one per year (year -> value). 'R' and 'RT' are special
+            # (no per-year pivot) and handled explicitly below. This table
+            # replaces ~330 lines that were one near-identical if-branch per
+            # group; the emitted structure is unchanged.
+            PIVOT_KEYS = {
+                'RYT':     [('Tech', 't')],
+                'RYCn':    [('Con', 'cn')],
+                'RYC':     [('Comm', 'f')],
+                'RYE':     [('Emi', 'e')],
+                'RYS':     [('Stg', 's')],
+                'RYTM':    [('Tech', 't'), ('MoId', 'm')],
+                'RYTC':    [('Tech', 't'), ('Comm', 'f')],
+                'RYTE':    [('Tech', 't'), ('Emi', 'e')],
+                'RYTTs':   [('Tech', 't'), ('Ts', 'l')],
+                'RYCTs':   [('Comm', 'f'), ('Ts', 'l')],
+                'RYTEM':   [('Tech', 't'), ('Emi', 'e'), ('MoId', 'm')],
+                'RYTCTs':  [('Tech', 't'), ('Comm', 'f'), ('Ts', 'l')],
+                'RYTMTs':  [('Tech', 't'), ('MoId', 'm'), ('Ts', 'l')],
+                'RYTCMTs': [('Tech', 't'), ('Comm', 'f'), ('MoId', 'm'), ('Ts', 'l')],
+            }
+
+            # Read each view group file at most once and write it at most once.
+            # Previously every (csv, param) match re-read and re-serialized the
+            # whole group file (RYTC.json ~8 MB), so one run wrote ~50 MB to
+            # produce ~14 MB - quadratic in stored caseruns and view size.
+            # view_cache holds the live dict per group; dirty_groups tracks which
+            # files to flush after all CSVs are processed.
+            view_cache = {}
+            dirty_groups = set()
+
             for csv in csvs:
-                #read csv file
                 csv_path = Path(Config.DATA_STORAGE,self.case,'res', caserunname, 'csv', csv)
-                if csv_path.is_file():
-                    df = pd.read_csv(csv_path)
-                    data = df.to_json(orient='records', indent=2)
-                    jsondata = json.loads(data)
+                if not csv_path.is_file():
+                    continue
 
-                    if len(jsondata) != 0:
-                        for param, paramobj in paramByName.items():
+                df = pd.read_csv(csv_path)
+                jsondata = json.loads(df.to_json(orient='records', indent=2))
+                if len(jsondata) == 0:
+                    continue
 
-                            if param in jsondata[0]:
+                # Each result CSV has exactly one parameter value-column; find it,
+                # pivot that CSV into its view group, then stop (the original
+                # broke after the first matching parameter).
+                for param, paramobj in paramByName.items():
+                    if param not in jsondata[0]:
+                        continue
 
-                                viewGroupPath = Path(Config.DATA_STORAGE,self.case,'view', paramobj['group']+ '.json')
-                                if viewGroupPath.is_file():
-                                    viewData = File.readFile(viewGroupPath)
-                                else:
-                                    viewData = {}
+                    group = paramobj['group']
+                    # Groups without a layout were read-but-never-written by the
+                    # original code (a no-op); preserve that and stop scanning.
+                    if group != 'R' and group != 'RT' and group not in PIVOT_KEYS:
+                        break
 
-                                if paramobj['id'] not in viewData:
-                                    viewData[paramobj['id']] = {}
+                    if group in view_cache:
+                        viewData = view_cache[group]
+                    else:
+                        viewGroupPath = Path(self.viewFolderPath, group + '.json')
+                        viewData = File.readFile(viewGroupPath) if viewGroupPath.is_file() else {}
+                        view_cache[group] = viewData
 
-                                # if caserunname not in viewData[paramobj['id']]:
-                                #     viewData[paramobj['id']][caserunname] = []
+                    if paramobj['id'] not in viewData:
+                        viewData[paramobj['id']] = {}
+                    rows = []
+                    viewData[paramobj['id']][caserunname] = rows
+                    dirty_groups.add(group)
 
-                                #ovdje uvijek moramo napraviti novi niy jer je novi caserun i novi podaci
-                                viewData[paramobj['id']][caserunname] = []
+                    if group == 'R':
+                        tmp = {}
+                        for obj in jsondata:
+                            tmp['ObjectiveValue'] = obj[param]
+                        rows.append(tmp)
+                    elif group == 'RT':
+                        tmp = {}
+                        for obj in jsondata:
+                            tmp[obj['t']] = obj[param]
+                        rows.append(tmp)
+                    else:
+                        keyspec = PIVOT_KEYS[group]
+                        cols = [col for _, col in keyspec]
+                        prev = tuple(jsondata[0][col] for col in cols)
+                        tmp = {}
+                        for obj in jsondata:
+                            cur = tuple(obj[col] for col in cols)
+                            if cur != prev:
+                                prev = cur
+                                rows.append(tmp)
+                                tmp = {}
+                            for label, col in keyspec:
+                                tmp[label] = obj[col]
+                            tmp[obj['y']] = obj[param]
+                        rows.append(tmp)
 
-                                if paramobj['group'] == 'R':
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        tmp['ObjectiveValue'] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
+                    break
 
-                                if paramobj['group'] == 'RT':
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        tmp[ obj['t']] =obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-
-                                if paramobj['group'] == 'RYT':
-                                    tech = jsondata[0]['t']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if tech == obj['t']:
-                                            tmp['Tech'] = obj['t']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            tech = obj['t']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Tech'] = obj['t']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)  
-
-                                if paramobj['group'] == 'RYCn':
-                                    con = jsondata[0]['cn']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if con == obj['cn']:
-                                            tmp['Con'] = obj['cn']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            con = obj['cn']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Con'] = obj['cn']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)  
-
-                                if paramobj['group'] == 'RYC':
-                                    comm = jsondata[0]['f']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if comm == obj['f']:
-                                            tmp['Comm'] = obj['f']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            comm = obj['f']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Comm'] = obj['f']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path) 
-
-                                if paramobj['group'] == 'RYE':
-                                    emi = jsondata[0]['e']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if emi == obj['e']:
-                                            tmp['Emi'] = obj['e']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            emi = obj['e']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Emi'] = obj['e']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)  
-
-                                if paramobj['group'] == 'RYS':
-                                    stg = jsondata[0]['s']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if stg == obj['s']:
-                                            tmp['Stg'] = obj['s']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            stg = obj['s']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Stg'] = obj['s']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path) 
-
-                                if paramobj['group'] == 'RYTM':
-                                    tech = jsondata[0]['t']
-                                    mod = jsondata[0]['m']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if tech == obj['t'] and mod == obj['m']:
-                                            tmp['Tech'] = obj['t']
-                                            tmp['MoId'] = obj['m']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            tech = obj['t']
-                                            mod = obj['m']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Tech'] = obj['t']
-                                            tmp['MoId'] = obj['m']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-
-                                if paramobj['group'] == 'RYTC':
-                                    tech = jsondata[0]['t']
-                                    comm = jsondata[0]['f']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if tech == obj['t'] and comm == obj['f']:
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Comm'] = obj['f']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            tech = obj['t']
-                                            comm = obj['f']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Comm'] = obj['f']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-
-                                if paramobj['group'] == 'RYTE':
-                                    tech = jsondata[0]['t']
-                                    emi = jsondata[0]['e']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if tech == obj['t'] and emi == obj['e']:
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Emi'] = obj['e']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            tech = obj['t']
-                                            emi = obj['e']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Emi'] = obj['e']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-
-                                if paramobj['group'] == 'RYTTs':
-                                    tech = jsondata[0]['t']
-                                    ts = jsondata[0]['l']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if tech == obj['t'] and ts == obj['l']:
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            tech = obj['t']
-                                            ts = obj['l']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-
-                                if paramobj['group'] == 'RYCTs':
-                                    comm = jsondata[0]['f']
-                                    ts = jsondata[0]['l']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if comm == obj['f'] and ts == obj['l']:
-                                            tmp['Comm'] = obj['f']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            comm = obj['f']
-                                            ts = obj['l']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Comm'] = obj['f']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-
-                                if paramobj['group'] == 'RYTEM':
-                                    tech = jsondata[0]['t']
-                                    emi = jsondata[0]['e']
-                                    mod = jsondata[0]['m']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if tech == obj['t'] and emi == obj['e'] and mod == obj['m']:
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Emi'] = obj['e']
-                                            tmp['MoId'] = obj['m']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            tech = obj['t']
-                                            emi = obj['e']
-                                            mod = obj['m']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Emi'] = obj['e']
-                                            tmp['MoId'] = obj['m']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-
-                                if paramobj['group'] == 'RYTCTs':
-                                    tech = jsondata[0]['t']
-                                    comm = jsondata[0]['f']
-                                    ts = jsondata[0]['l']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if tech == obj['t'] and comm == obj['f'] and ts == obj['l']:
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Comm'] = obj['f']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            tech = obj['t']
-                                            comm = obj['f']
-                                            ts = obj['l']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Comm'] = obj['f']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-
-                                # ne postoje vise varijable za ovaj dio Production By tecnology, Use By technology
-                                if paramobj['group'] == 'RYTMTs':
-                                    tech = jsondata[0]['t']
-                                    mod = jsondata[0]['m']
-                                    ts = jsondata[0]['l']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if tech == obj['t'] and mod == obj['m'] and ts == obj['l']:
-                                            tmp['Tech'] = obj['t']
-                                            tmp['MoId'] = obj['m']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            tech = obj['t']
-                                            mod = obj['m']
-                                            ts = obj['l'] 
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Tech'] = obj['t']
-                                            tmp['MoId'] = obj['m']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-                            
-                                # ne koristi se jer smo izbrisali variajablu ROUBTBM Rate Of Use By Technology By Mode
-                                #ponovo koristimo jer korisitmo Production By Technology by Mode, Use By Technology By Mode (isto i sa Rate of...)
-                                if paramobj['group'] == 'RYTCMTs':
-                                    tech = jsondata[0]['t']
-                                    comm = jsondata[0]['f']
-                                    mod = jsondata[0]['m']
-                                    ts = jsondata[0]['l']
-                                    tmp = {}
-                                    for obj in jsondata:
-                                        if tech == obj['t'] and comm == obj['f'] and mod == obj['m'] and ts == obj['l']:
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Comm'] = obj['f']
-                                            tmp['MoId'] = obj['m']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                        else:
-                                            tech = obj['t']
-                                            comm = obj['f']
-                                            mod = obj['m']
-                                            ts = obj['l']
-                                            viewData[paramobj['id']][caserunname].append(tmp)
-                                            tmp = {}
-                                            tmp['Tech'] = obj['t']
-                                            tmp['Comm'] = obj['f']
-                                            tmp['MoId'] = obj['m']
-                                            tmp['Ts'] = obj['l']
-                                            tmp[obj['y']] = obj[param]
-                                    viewData[paramobj['id']][caserunname].append(tmp)
-                                    path = Path(self.viewFolderPath, paramobj['group']+'.json')
-                                    File.writeFile( viewData, path)
-                                
-                                break
+            for group in dirty_groups:
+                File.writeFile(view_cache[group], Path(self.viewFolderPath, group + '.json'))
 
         except(IOError, IndexError):
             raise IndexError
