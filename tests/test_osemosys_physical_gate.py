@@ -1,9 +1,11 @@
-from scripts.validate_osemosys_physical_gate import evaluate_annual
+from scripts.validate_osemosys_physical_gate import evaluate_slice, interval_term
 
 
 def annual_result(demand: float, ceiling: float):
-    return evaluate_annual(
+    return evaluate_slice(
         year="2030",
+        timeslice="ANNUAL",
+        year_split=1.0,
         direct_demand={"service": demand},
         technologies=("producer",),
         routes_by_output={"service": [("producer", 1, 1.0)]},
@@ -17,25 +19,18 @@ def annual_result(demand: float, ceiling: float):
 def test_annual_aad_envelope_passes_without_timeslice_profile():
     result = annual_result(demand=9.0, ceiling=10.0)
     assert result["status"] == "passed"
-    assert result["period"] == "annual"
     assert result["failures"] == []
+    assert result["forced_activity_lower_rate"] == {"producer": 9.0}
 
 
 def test_annual_aad_envelope_reports_generic_shortfall():
     result = annual_result(demand=11.0, ceiling=10.0)
     assert result["status"] == "failed"
-    assert result["failures"] == [{
-        "kind": "commodity_annual_shortfall",
-        "year": "2030",
-        "commodity": "GENERIC_SERVICE",
-        "commodity_id": "service",
-        "producers": [{
-            "technology": "GENERIC_PRODUCER",
-            "technology_id": "producer",
-            "mode": 1,
-            "output_capacity_annual_activity": 10.0,
-        }],
-        "required_annual_activity": 11.0,
-        "optimistic_production_upper_annual_activity": 10.0,
-        "headroom_annual_activity": -1.0,
-    }]
+    assert result["failures"][0]["kind"] == "commodity_timeslice_shortfall"
+    assert result["failures"][0]["commodity"] == "GENERIC_SERVICE"
+    assert result["failures"][0]["headroom_rate"] == -1.0
+
+
+def test_interval_term_respects_negative_coefficients():
+    assert interval_term(2.0, 3.0, 5.0) == (6.0, 10.0)
+    assert interval_term(-2.0, 3.0, 5.0) == (-10.0, -6.0)
