@@ -40,6 +40,7 @@ from Routes.Case.ViewDataRoute import viewdata_api
 from Routes.DataFile.DataFileRoute import datafile_api
 from Routes.OGCore.OGCoreInstallRoute import ogcore_install_api
 from Routes.OGCore.OGCoreRunRoute import ogcore_run_api
+from Routes.OGLink.OGLinkRoute import oglink_api
 from Classes.OGCore.InstallJob import InstallJob
 from Classes.OGCore.OGCoreCase import OGCoreCase
 from Classes.OGCore.RunJob import RunJob
@@ -113,6 +114,7 @@ app.register_blueprint(datafile_api)
 app.register_blueprint(syncs3_api)
 app.register_blueprint(ogcore_install_api)
 app.register_blueprint(ogcore_run_api)
+app.register_blueprint(oglink_api)
 
 CORS(app, origins=Config.CORS_ORIGINS, supports_credentials=True)
 
