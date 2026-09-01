@@ -16,6 +16,7 @@ from Classes.Base import Config
 from Classes.OGCore.CalibrationCatalog import CalibrationCatalog
 from Classes.OGCore.CalibrationRegistry import CalibrationRegistry
 from Classes.OGCore.InstallJob import InstallJob
+from Classes.OGCore.RunJob import RunJob
 from Classes.OGCore.Installer import (
     Installer,
     read_pyproject_package_name,
@@ -85,6 +86,22 @@ def _valid_country_id(country_id):
 
 def _default_dest_parent():
     return str(Config.OGC_MODELS_DIR)
+
+
+def _blocked_by_run(country_id):
+    """Error response if a model run is using this calibration, else None.
+
+    Installing over a calibration that is already present pulls and re-syncs its
+    venv in place, which would pull the environment out from under a live worker.
+    A country with nothing installed cannot have a run, so this is a no-op for a
+    first install. Called outside InstallJob's lock: is_country_running takes the
+    run layer's lock, and the run layer already nests run lock -> install lock.
+    """
+    if RunJob.is_country_running(country_id):
+        return _err(
+            "A model run is using this calibration; wait for it to finish first."
+        )
+    return None
 
 
 def _now_iso():
@@ -224,6 +241,9 @@ def installCalibration():
         # Key the install by the catalogue's own country_id so the card that reads
         # the catalogue and the installed record always agree (no ETH/eth mismatch).
         country_id = entry["country_id"]
+        blocked_by_run = _blocked_by_run(country_id)
+        if blocked_by_run:
+            return blocked_by_run
         job = InstallJob.start_install(
             source_type="catalog",
             country_id=country_id,
@@ -244,6 +264,9 @@ def installCalibration():
         country_name = data.get("country_name")
         if not country_name:
             return _err("Missing required field: country_name")
+        blocked_by_run = _blocked_by_run(country_id)
+        if blocked_by_run:
+            return blocked_by_run
         job = InstallJob.start_install(
             source_type="repo_url",
             country_id=country_id,
@@ -288,6 +311,12 @@ def registerLocalCalibration():
         return _err("That path is not valid.")
     if not Path(local_path).is_dir():
         return _err("That folder does not exist.")
+
+    # Registering re-syncs the venv just like an install does, so it needs the same
+    # gate: doing that under a live worker breaks the run mid-solve.
+    blocked_by_run = _blocked_by_run(country_id)
+    if blocked_by_run:
+        return blocked_by_run
 
     run_uv_sync = data.get("run_uv_sync", True)
     job = InstallJob.start_local_register(
@@ -426,6 +455,9 @@ def refreshCalibration():
         )
     if InstallJob.is_country_active(country_id):
         return _err("An update is already running for this country.")
+    blocked_by_run = _blocked_by_run(country_id)
+    if blocked_by_run:
+        return blocked_by_run
     path = Path(local_path)
     job = InstallJob.start_install(
         source_type="repo_url",

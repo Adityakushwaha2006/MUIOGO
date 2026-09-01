@@ -1,0 +1,507 @@
+"""On-disk CRUD for OG-Core cases and runs. Does not run the model or import
+ogcore; runs happen in a separate environment via the worker. Parameters live
+per run: a baseline and a reform are the same model with different params."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import shutil
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+from Classes.Base import Config
+from Classes.Base.FileClass import File
+
+logger = logging.getLogger(__name__)
+
+# A case/run name becomes a directory, so it has to be a safe path component.
+# Otherwise mkdir throws an opaque error, or on Windows makes a reserved device path.
+_RESERVED_NAMES = (
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+_UNSAFE_CHARS = set('<>:"/\\|?*') | {chr(c) for c in range(0, 32)}
+_MAX_NAME_LEN = 200
+
+
+def is_safe_name(name) -> bool:
+    if not isinstance(name, str) or not name or name in (".", ".."):
+        return False
+    if len(name) > _MAX_NAME_LEN:
+        return False
+    if any(ch in _UNSAFE_CHARS for ch in name):
+        return False
+    if name != name.rstrip(". "):  # Windows strips trailing dot/space
+        return False
+    if name.split(".")[0].upper() in _RESERVED_NAMES:
+        return False
+    return True
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _write_run_meta(meta: dict, path: Path) -> None:
+    """Write a run's meta atomically (temp file, then replace).
+
+    getRuns and getRunStatus poll this file every few seconds while a run writes to
+    it, so a half-written file would be read as corrupt. The worker already writes
+    its own status file this way.
+    """
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=True, indent=4)
+    os.replace(tmp, path)
+
+
+class OGCoreCase:
+    """One case on disk, at cases/<country_id>/<casename>.
+
+    Two countries can each hold a case of the same name, so the name alone does not
+    identify one. The directory a case sits in is the authority on its country.
+    """
+
+    def __init__(self, country_id: str, casename: str):
+        self.country_id = country_id
+        self.casename = casename
+        # Cases go in their own subfolder, not next to the registry/install entries.
+        self.country_path = Path(Config.OGC_CASES_DIR, country_id)
+        self.case_path = self.country_path / casename
+        self.gen_data_path = self.case_path / "genData.json"
+        self.res_path = self.case_path / "res"
+        self._gen_data: dict | None = None
+
+    def run_params_path(self, run_name: str) -> Path:
+        return self.res_path / run_name / "ogcParams.json"
+
+    @property
+    def gen_data(self) -> dict:
+        if self._gen_data is None:
+            self._gen_data = File.readFile(self.gen_data_path)
+        return self._gen_data
+
+    def _write_gen_data(self, data: dict) -> None:
+        File.writeFile(data, self.gen_data_path)
+        self._gen_data = None  # invalidate cache
+
+    def create_case(self, gen_data: dict) -> dict:
+        # exist_ok False on the case dir so a logic error fails loudly instead of
+        # overwriting an existing case.
+        if not is_safe_name(self.casename):
+            return {"message": "Invalid case name.", "status_code": "error"}
+        if not is_safe_name(self.country_id):
+            return {"message": "Invalid country id.", "status_code": "error"}
+        self.country_path.mkdir(parents=True, exist_ok=True)
+        self.case_path.mkdir(parents=True, exist_ok=False)
+        self.res_path.mkdir(parents=True, exist_ok=True)
+        gen_data["ogc-runs"] = []
+        gen_data["ogc-version"] = "1.0"
+        # The directory decides the country, so genData records that rather than
+        # whatever the caller passed.
+        gen_data["country_id"] = self.country_id
+        self._write_gen_data(gen_data)
+        logger.info("Created OG-Core case '%s'", self.casename)
+        return {"message": f"Case {self.casename} created.", "status_code": "created"}
+
+    def save_case(self, gen_data: dict) -> dict:
+        # Carry the run index and version forward so editing details never wipes runs.
+        existing = self.gen_data
+        gen_data["ogc-runs"] = existing.get("ogc-runs", [])
+        gen_data["ogc-version"] = existing.get("ogc-version", "1.0")
+        # An edit cannot move a case to another country: the directory it was found
+        # in is the country, whatever the body says.
+        gen_data["country_id"] = self.country_id
+        self._write_gen_data(gen_data)
+        logger.info("Updated OG-Core case '%s'", self.casename)
+        return {"message": f"Case {self.casename} updated.", "status_code": "edited"}
+
+    def delete_case(self) -> dict:
+        shutil.rmtree(self.case_path)
+        logger.info("Deleted OG-Core case '%s'", self.casename)
+        return {"message": f"Case {self.casename} deleted.", "status_code": "success_session"}
+
+    @classmethod
+    def list_cases(cls, country_id: str | None = None) -> list[dict]:
+        """Every case, or only the given country's.
+
+        The country comes from the directory a case was found in, not from its
+        genData, so a case can never report a country it is not stored under.
+        """
+        # One bad case dir shouldn't break the whole listing, so log and skip it.
+        cases: list[dict] = []
+        cases_dir = Config.OGC_CASES_DIR
+        if not cases_dir.is_dir():
+            return cases
+        if country_id is None:
+            country_dirs = [d for d in sorted(cases_dir.iterdir()) if d.is_dir()]
+        else:
+            wanted = cases_dir / country_id
+            country_dirs = [wanted] if wanted.is_dir() else []
+        for country_dir in country_dirs:
+            try:
+                entries = sorted(country_dir.iterdir())
+            except OSError as exc:
+                logger.warning("Skipping unreadable country dir '%s': %s",
+                               country_dir.name, exc)
+                continue
+            for entry in entries:
+                if not entry.is_dir():
+                    continue
+                gen_path = entry / "genData.json"
+                try:
+                    gd = File.readFile(gen_path)
+                    mtime = gen_path.stat().st_mtime
+                except (OSError, ValueError, KeyError) as exc:
+                    logger.warning("Skipping unreadable OG-Core case dir '%s': %s",
+                                   entry.name, exc)
+                    continue
+                modified_at = datetime.fromtimestamp(mtime, timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                )
+                cases.append({
+                    # Both taken from the path: a genData that disagrees would name
+                    # a case nobody can address.
+                    "casename": entry.name,
+                    "country_id": country_dir.name,
+                    "description": gd.get("ogc-description", ""),
+                    "modified_at": modified_at,
+                    "has_results": cls._case_has_results(entry),
+                })
+        return cases
+
+    @classmethod
+    def migrate_flat_cases(cls) -> int:
+        """Move cases stored before nesting into their country's directory.
+
+        A case directory holds a genData.json and a country directory never does, so
+        one directly under the cases directory is a leftover from the flat layout.
+        Its country comes from its own genData; a case that records none is left
+        alone, since guessing would hide it from the country that owns it.
+
+        Moves go through a staging directory outside the cases tree, because a flat
+        case whose name matches a country directory would otherwise rename into
+        itself. Returns the number moved.
+        """
+        cases_dir = Config.OGC_CASES_DIR
+        if not cases_dir.is_dir():
+            return 0
+        try:
+            flat = [
+                d for d in sorted(cases_dir.iterdir())
+                if d.is_dir() and (d / "genData.json").is_file()
+            ]
+        except OSError:
+            return 0
+        if not flat:
+            return 0
+
+        staging_root = cases_dir.parent / "migrate_tmp"
+        moved = 0
+        for case_dir in flat:
+            try:
+                country_id = File.readFile(case_dir / "genData.json").get("country_id")
+            except (OSError, ValueError, KeyError, IndexError) as exc:
+                logger.warning("Leaving case '%s' unmoved, genData unreadable: %s",
+                               case_dir.name, exc)
+                continue
+            if not country_id or not is_safe_name(country_id):
+                logger.warning("Leaving case '%s' unmoved, it records no country.",
+                               case_dir.name)
+                continue
+            target = cases_dir / country_id / case_dir.name
+            if target.exists():
+                logger.warning("Leaving case '%s' unmoved, %s already exists.",
+                               case_dir.name, target)
+                continue
+            try:
+                staging_root.mkdir(parents=True, exist_ok=True)
+                staged = Path(tempfile.mkdtemp(dir=staging_root)) / case_dir.name
+                os.replace(case_dir, staged)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(staged, target)
+                staged.parent.rmdir()
+                moved += 1
+                logger.info("Moved case '%s' under country '%s'.",
+                            case_dir.name, country_id)
+            except OSError as exc:
+                logger.warning("Could not move case '%s': %s", case_dir.name, exc)
+        try:
+            if staging_root.is_dir():
+                staging_root.rmdir()
+        except OSError:
+            pass  # something else is in there; leaving it is harmless
+        return moved
+
+    @staticmethod
+    def _case_has_results(case_dir: Path) -> bool:
+        res_dir = case_dir / "res"
+        if not res_dir.is_dir():
+            return False
+        try:
+            run_dirs = [d for d in res_dir.iterdir() if d.is_dir()]
+        except OSError:
+            return False
+        for run_dir in run_dirs:
+            meta_path = run_dir / "run_meta.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = File.readFile(meta_path)
+            except (OSError, ValueError, KeyError):
+                continue
+            if isinstance(meta, dict) and meta.get("status") == "completed":
+                return True
+        return False
+
+    def get_params(self, run_name: str) -> dict:
+        path = self.run_params_path(run_name)
+        return File.readFile(path) if path.exists() else {}
+
+    def save_params(self, run_name: str, params: dict) -> dict:
+        run_dir = self.res_path / run_name
+        if not run_dir.is_dir():
+            return {"message": "Run not found.", "status_code": "error"}
+        File.writeFile(params, self.run_params_path(run_name))
+        return {"message": "Parameters saved.", "status_code": "success"}
+
+    def create_run(
+        self,
+        run_name: str,
+        run_type: str,
+        baseline_run_name: str | None,
+        params: dict | None = None,
+    ) -> dict:
+        # A reform must name an existing baseline; completion is checked later at
+        # run time, not here.
+        if not is_safe_name(run_name):
+            return {"message": "Invalid run name.", "status_code": "error"}
+        if not self.gen_data_path.exists():
+            return {"message": "Case not found.", "status_code": "error"}
+        if run_type not in ("baseline", "reform"):
+            return {"message": "run_type must be 'baseline' or 'reform'.",
+                    "status_code": "error"}
+
+        run_path = self.res_path / run_name
+        if run_path.exists():
+            return {"message": "Run with same name already exists.", "status_code": "exist"}
+
+        if run_type == "baseline":
+            # One baseline per case; reforms read its outputs.
+            if self.get_baseline_name() is not None:
+                return {"message": "This case already has a baseline run.",
+                        "status_code": "exist"}
+            baseline_output_path = None
+        else:  # reform
+            if not baseline_run_name:
+                return {"message": "baseline_run_name required for reform runs.",
+                        "status_code": "error"}
+            baseline_meta_path = self.res_path / baseline_run_name / "run_meta.json"
+            if not baseline_meta_path.exists():
+                return {"message": "Baseline run not found.", "status_code": "error"}
+            index_entry = next(
+                (r for r in self.gen_data.get("ogc-runs", [])
+                 if r.get("RunName") == baseline_run_name),
+                None,
+            )
+            if index_entry is None or index_entry.get("RunType") != "baseline":
+                return {"message": "baseline_run_name must name a baseline run.",
+                        "status_code": "error"}
+            baseline_output_path = str(self.res_path / baseline_run_name)
+
+        run_path.mkdir(parents=True, exist_ok=True)
+
+        File.writeFile(params or {}, self.run_params_path(run_name))
+
+        run_meta = {
+            "run_name": run_name,
+            "run_type": run_type,
+            # The name is the portable half: the absolute path below is rewritten at
+            # launch, so a case restored elsewhere still finds its baseline.
+            "baseline_run_name": baseline_run_name if run_type == "reform" else None,
+            "baseline_output_path": baseline_output_path,
+            "time_path": None,
+            "status": "pending",
+            "error": None,
+            "created_at": _utc_now_iso(),
+            "completed_at": None,
+        }
+        _write_run_meta(run_meta, run_path / "run_meta.json")
+
+        gd = self.gen_data
+        runs = gd.get("ogc-runs", [])
+        runs.append({
+            "RunId": self._next_run_id(runs),
+            "RunName": run_name,
+            "RunType": run_type,
+            "baseline_run_name": baseline_run_name,
+        })
+        gd["ogc-runs"] = runs
+        self._write_gen_data(gd)
+        logger.info("Created %s run '%s' in case '%s'", run_type, run_name, self.casename)
+        return {"message": "Run created.", "status_code": "success"}
+
+    @staticmethod
+    def _next_run_id(runs: list) -> str:
+        """Next unused run id. Counting entries would reuse an id after a delete."""
+        highest = -1
+        for run in runs:
+            raw = str(run.get("RunId", ""))
+            if raw.startswith("run_") and raw[4:].isdigit():
+                highest = max(highest, int(raw[4:]))
+        return f"run_{highest + 1}"
+
+    def baseline_dir(self, run_name: str) -> Path | None:
+        """Where this reform's baseline lives, resolved against this case.
+
+        run_meta stores an absolute baseline path, which goes stale as soon as the
+        case is restored on another machine or the install moves. Resolve from the
+        baseline's name instead, falling back to the leaf of the stored path for
+        runs created before the name was recorded.
+        """
+        meta = self.get_run_meta(run_name)
+        if not meta:
+            return None
+        name = meta.get("baseline_run_name")
+        if not name:
+            stored = meta.get("baseline_output_path")
+            name = Path(stored).name if stored else None
+        if not name:
+            return None
+        return self.res_path / name
+
+    def get_baseline_name(self) -> str | None:
+        if not self.gen_data_path.exists():
+            return None
+        for run in self.gen_data.get("ogc-runs", []):
+            if run.get("RunType") == "baseline":
+                return run.get("RunName")
+        return None
+
+    def delete_run(self, run_name: str) -> dict:
+        # Deleting the baseline removes the whole case, since every reform depends on it.
+        if not self.gen_data_path.exists():
+            return {"message": "Case not found.", "status_code": "error"}
+        if self.get_baseline_name() == run_name:
+            shutil.rmtree(self.case_path)
+            logger.info("Deleted baseline run '%s'; removed case '%s'",
+                        run_name, self.casename)
+            return {
+                "message": f"Baseline removed; case {self.casename} deleted.",
+                "status_code": "success_session",
+            }
+        run_path = self.res_path / run_name
+        if run_path.exists():
+            shutil.rmtree(run_path)
+        gd = self.gen_data
+        gd["ogc-runs"] = [r for r in gd.get("ogc-runs", []) if r["RunName"] != run_name]
+        self._write_gen_data(gd)
+        logger.info("Deleted run '%s' from case '%s'", run_name, self.casename)
+        return {"message": "Run deleted.", "status_code": "success"}
+
+    def get_runs(self) -> list:
+        # Run index with each run's live status from its run_meta. Entries are
+        # copies so the status fields don't leak back into cached genData.
+        if not self.gen_data_path.exists():
+            return []
+        enriched = []
+        for run in self.gen_data.get("ogc-runs", []):
+            item = dict(run)  # copy so we don't mutate cached gen_data
+            meta_path = self.res_path / item["RunName"] / "run_meta.json"
+            meta = None
+            if meta_path.exists():
+                # An unreadable meta must not break the whole listing; the run just
+                # reads as pending until its next write.
+                try:
+                    meta = File.readFile(meta_path)
+                except (OSError, ValueError, KeyError, IndexError):
+                    meta = None
+            if isinstance(meta, dict):
+                item["status"] = meta.get("status", "pending")
+                item["time_path"] = meta.get("time_path")
+                item["completed_at"] = meta.get("completed_at")
+                item["error"] = meta.get("error")
+            else:
+                item["status"] = "pending"
+                item["time_path"] = None
+                item["completed_at"] = None
+                item["error"] = None
+            enriched.append(item)
+        return enriched
+
+    def get_runs_shaped(self) -> dict:
+        # Same as get_runs, split into the single baseline plus the list of reforms.
+        baseline = None
+        reforms = []
+        for item in self.get_runs():
+            if item.get("RunType") == "baseline":
+                baseline = item
+            else:
+                reforms.append(item)
+        return {"baseline": baseline, "reforms": reforms}
+
+    def get_run_meta(self, run_name: str) -> dict:
+        path = self.res_path / run_name / "run_meta.json"
+        return File.readFile(path) if path.exists() else {}
+
+    def update_run_status(
+        self,
+        run_name: str,
+        status: str,
+        error: str | None = None,
+        time_path: bool | None = None,
+    ) -> None:
+        # Stamps completed_at when the run reaches a terminal state.
+        path = self.res_path / run_name / "run_meta.json"
+        meta = File.readFile(path)
+        meta["status"] = status
+        meta["error"] = error
+        if time_path is not None:
+            meta["time_path"] = time_path
+        if status in ("completed", "failed"):
+            meta["completed_at"] = _utc_now_iso()
+            meta["pid"] = None  # the worker is gone; drop the stale pid
+        _write_run_meta(meta, path)
+
+    def set_run_pid(self, run_name: str, pid) -> None:
+        """Record the live worker's pid so a restart can clean up an orphan."""
+        path = self.res_path / run_name / "run_meta.json"
+        meta = File.readFile(path)
+        meta["pid"] = pid
+        _write_run_meta(meta, path)
+
+    def stamp_execution(
+        self,
+        run_name: str,
+        time_path: bool,
+        country: dict,
+        status: str,
+    ) -> None:
+        # Pin the time_path and country onto the meta at launch, clearing any old error.
+        path = self.res_path / run_name / "run_meta.json"
+        meta = File.readFile(path)
+        meta["time_path"] = time_path
+        meta["country"] = country
+        meta["status"] = status
+        meta["error"] = None
+        meta["pid"] = None  # set once the worker is actually spawned
+        # Rewrite the baseline path from its name. The stored one is absolute, so it
+        # is wrong for a case restored on another machine; the worker reads this file.
+        name = meta.get("baseline_run_name")
+        if not name and meta.get("baseline_output_path"):
+            name = Path(meta["baseline_output_path"]).name
+        if name:
+            meta["baseline_run_name"] = name
+            meta["baseline_output_path"] = str(self.res_path / name)
+        _write_run_meta(meta, path)
+
+    def set_run_provenance(self, run_name: str, provenance: dict) -> None:
+        path = self.res_path / run_name / "run_meta.json"
+        meta = File.readFile(path)
+        meta["provenance"] = provenance
+        _write_run_meta(meta, path)
