@@ -4,6 +4,8 @@
   python -m oglink channels             # the channel functions + direction
   python -m oglink run clean_incidence  # build baseline, apply channels, solve, report
   python -m oglink run coupled --out ./runs
+  python -m oglink writeback --run ./runs/coupled --country phl \
+      --case <case> --base-caserun <run>   # apply the demand feedback back to CLEWS
 """
 from __future__ import annotations
 
