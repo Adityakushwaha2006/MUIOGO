@@ -2226,6 +2226,7 @@ class DataFile(Osemosys):
 
                 statusFlag = "warning"
                 customMsg = "   "
+                oglinkInfo = None
                 if any("Optimal" in s for s in msg):
                     matching = [s for s in msg if "Optimal" in s]
                     customMsg = customMsg + matching[0] + " - "
@@ -2255,6 +2256,14 @@ class DataFile(Osemosys):
                     print("PIVOT TABLE DONE! --- %s seconds --- %s" % (time.time() - start_time, caserunname))
                     txtOut = txtOut + ("Pivot data preparation time {:0.2f}s;{}".format(time.time() - start_time, '\n'))
 
+                    # OG-CLEWS link post-run hook: opt-in per case (oglink/hook.json),
+                    # subprocess-only; a hook failure never affects the CLEWs run itself.
+                    try:
+                        from Classes.OGLink.PostRunHook import PostRunHook
+                        oglinkInfo = PostRunHook.after_run(self.case, caserunname)
+                    except Exception as ex:
+                        print("OGLink hook error (CLEWs run unaffected):", ex)
+
 
                 print("MESSAGES DONE! --- %s seconds --- %s" % (time.time() - start_time, caserunname))
                 txtOut = txtOut + ("Message preparation time {:0.2f}s;{}".format(time.time() - start_time, '\n'))
@@ -2267,7 +2276,9 @@ class DataFile(Osemosys):
                     "timer": customMsg,
                     "status_code": statusFlag,
                     "caserun": caserunname
-                } 
+                }
+                if oglinkInfo:
+                    response["oglink"] = oglinkInfo
 
            
             if lock is not None:
